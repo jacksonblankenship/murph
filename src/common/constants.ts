@@ -12,6 +12,13 @@ Just send me a message and I'll respond. Use /help to see available commands.`,
 /start - Get a welcome message
 /hello - Say hello
 /help - Show this help message
+/newsession - Start a new conversation (clears history)
 
-💬 Or just send me any message and I'll respond using AI!`,
+💬 Or just send me any message and I'll respond using AI!
+
+I remember our conversation history and can use tools to help you with tasks!`,
+
+  NEW_SESSION: '✨ Started a new conversation session! Previous messages have been cleared.',
+
+  SESSION_CLEARED: '🔄 Conversation history cleared.',
 };
