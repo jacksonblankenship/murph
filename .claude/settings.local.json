@@ -44,10 +44,5 @@
     ]
   },
   "enableAllProjectMcpServers": true,
-  "enabledMcpjsonServers": [
-    "linear",
-    "sentry",
-    "graphite",
-    "context7"
-  ]
+  "enabledMcpjsonServers": ["linear", "sentry", "graphite", "context7"]
 }

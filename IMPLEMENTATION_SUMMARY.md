@@ -1,299 +1,192 @@
-# Conversation History Implementation Summary
+# Implementation Summary: Exa Web Search & Proactive Task Scheduling
 
 ## ✅ Completed Implementation
 
-### 1. Dependencies Added
-- ✅ `ioredis@5.9.2` - Redis client for Node.js
-- ✅ `@types/ioredis@5.0.0` - TypeScript definitions
+Successfully implemented:
+1. **Exa web search integration** - Real web search using Exa API
+2. **Proactive scheduling system** - One-time and recurring task scheduling with BullMQ
 
-### 2. New Files Created
+## Features Added
 
-#### Redis Infrastructure
-- ✅ `src/redis/redis.service.ts` - Redis client wrapper with connection management
-- ✅ `src/redis/redis.module.ts` - NestJS module for Redis
+### 1. Exa Web Search
+- Real web search via Exa API
+- Configurable number of results
+- Formatted search results with titles, URLs, and snippets
+- Error handling for API issues
 
-#### Conversation Management
-- ✅ `src/bot/conversation.service.ts` - Core conversation history service
-  - Stores/retrieves messages per user
-  - Implements 4-layer session management:
-    1. Message limit (50 messages)
-    2. TTL (24 hours)
-    3. Manual reset (`/newsession`)
-    4. Automatic pruning
+### 2. Task Scheduling System
+- **One-time tasks**: Schedule messages for specific future times
+- **Recurring tasks**: Schedule messages with cron expressions
+- **Redis persistence**: Tasks survive bot restarts
+- **Automatic recovery**: Tasks are restored on startup
+- **BullMQ integration**: Reliable job queue with retry logic
+- **Proactive messaging**: Bot can send messages without user interaction
 
-### 3. Modified Files
+## Tools Available to Bot
 
-#### Environment Configuration
-- ✅ `.env.example` - Added Redis configuration template
-- ✅ `.env` - Added Redis configuration values
-
-#### Bot Services
-- ✅ `src/bot/llm.service.ts`
-  - Updated `generateResponse()` to accept conversation history
-  - Increased `max_tokens` from 1024 to 4096
-  - Builds full message array from history
-
-- ✅ `src/bot/bot.update.ts`
-  - Added `ConversationService` injection
-  - Updated `@On('text')` handler to:
-    - Extract user ID
-    - Retrieve conversation history
-    - Store both user and assistant messages
-  - Added `/newsession` command
-
-- ✅ `src/bot/bot.module.ts`
-  - Imported `RedisModule`
-  - Added `ConversationService` to providers
-
-- ✅ `src/common/constants.ts`
-  - Added `NEW_SESSION` message
-  - Added `SESSION_CLEARED` message
-  - Updated `HELP` message with `/newsession` command
-
-### 4. Documentation
-- ✅ `REDIS_SETUP.md` - Complete Redis setup and testing guide
-- ✅ `IMPLEMENTATION_SUMMARY.md` - This file
-
-## Architecture
-
-### Data Flow
-```
-User Message
-    ↓
-BotUpdate (@On('text'))
-    ↓
-Extract userId (ctx.from.id)
-    ↓
-ConversationService.getConversation(userId)
-    ↓
-LlmService.generateResponse(message, history)
-    ↓
-ConversationService.addMessage(userId, 'user', message)
-ConversationService.addMessage(userId, 'assistant', response)
-    ↓
-Send response to user
-```
-
-### Redis Data Structure
-
-**Key Format:**
-```
-conversation:user:{userId}
-```
-
-**Value (JSON array):**
-```json
-[
-  {
-    "role": "user",
-    "content": "message text",
-    "timestamp": 1738800000000
-  },
-  {
-    "role": "assistant",
-    "content": "response text",
-    "timestamp": 1738800001000
-  }
-]
-```
-
-**Metadata:**
-- TTL: 24 hours (auto-resets on each message)
-- Max messages: 50 (automatic pruning)
-
-### Session Management Strategy
-
-1. **Message Count Limit (50 messages)**
-   - Keeps last 50 messages per conversation
-   - Automatic pruning on each new message
-   - Prevents unbounded memory growth
-
-2. **TTL (24 hours)**
-   - Redis key auto-expires after 24 hours of inactivity
-   - TTL resets on each new message
-   - Natural cleanup of abandoned conversations
-
-3. **Manual Reset**
-   - `/newsession` command clears conversation
-   - Immediate deletion of Redis key
-   - Starts fresh conversation
-
-4. **Token Estimation (Future)**
-   - Currently using message count
-   - Can be enhanced with character/token estimation
-   - Claude Sonnet 4: 200k context window
-
-## New Bot Commands
-
-| Command | Description |
-|---------|-------------|
-| `/newsession` | Start a new conversation (clears history) |
-
-## Configuration
-
-### Required Environment Variables
-
-```env
-# Redis Configuration
-REDIS_HOST=localhost      # Redis server hostname
-REDIS_PORT=6379          # Redis server port
-REDIS_PASSWORD=          # Redis password (optional)
-```
-
-## Testing Checklist
-
-- [ ] Start Redis server
-- [ ] Build passes (`bun run build`)
-- [ ] Bot starts successfully (`bun run dev`)
-- [ ] Bot remembers conversation context
-- [ ] `/newsession` clears conversation
-- [ ] Message limit enforced (50 messages)
-- [ ] TTL works (24 hour expiration)
-- [ ] Error handling for Redis disconnection
-
-## Next Steps for Testing
-
-1. **Start Redis:**
-   ```bash
-   docker run -d --name murph-redis -p 6379:6379 redis:alpine
-   ```
-
-2. **Start the bot:**
-   ```bash
-   bun run dev
-   ```
-
-3. **Test conversation memory:**
-   - Message: "Hi, my name is Alice"
-   - Follow-up: "What's my name?"
-   - Expected: Bot remembers "Alice"
-
-4. **Test session reset:**
-   - Send `/newsession`
-   - Ask: "What's my name?"
-   - Expected: Bot doesn't remember
-
-5. **Verify Redis data:**
-   ```bash
-   redis-cli KEYS conversation:user:*
-   redis-cli GET conversation:user:YOUR_USER_ID
-   ```
-
-## Future Enhancements (Not Implemented)
-
-- Vector DB for semantic search
-- Conversation summarization
-- Multi-modal support (images/files)
-- Group chat support
-- Conversation export
-- Analytics and metrics
+1. **get_current_time** - Get current date/time
+2. **web_search** - Search the web using Exa (updated from placeholder)
+3. **remember_fact** - Store facts in memory
+4. **schedule_task** - Schedule one-time or recurring tasks (NEW)
+5. **cancel_scheduled_task** - Cancel scheduled tasks (NEW)
+6. **list_scheduled_tasks** - List all user's scheduled tasks (NEW)
 
 ## File Structure
 
 ```
 src/
+├── exa/
+│   ├── exa.module.ts          - Exa module
+│   └── exa.service.ts         - Exa API integration
+├── scheduler/
+│   ├── scheduler.module.ts    - BullMQ configuration
+│   ├── scheduler.service.ts   - Task scheduling logic
+│   ├── task.processor.ts      - BullMQ worker (executes jobs)
+│   ├── broadcast.service.ts   - Proactive message sending
+│   └── task.types.ts          - TypeScript types
 ├── bot/
-│   ├── bot.module.ts           # Updated: Added Redis & Conversation
-│   ├── bot.update.ts           # Updated: Added conversation flow
-│   ├── conversation.service.ts # NEW: Conversation management
-│   └── llm.service.ts          # Updated: Accepts history
-├── redis/
-│   ├── redis.module.ts         # NEW: Redis module
-│   └── redis.service.ts        # NEW: Redis client wrapper
-└── common/
-    └── constants.ts            # Updated: Added session messages
+│   ├── bot.module.ts          - Updated with ExaModule & SchedulerModule
+│   └── llm.service.ts         - Updated with 6 tools total
+└── app.module.ts              - Updated with SchedulerModule
 ```
 
-## Dependencies
+## Environment Variables
 
-```json
-{
-  "dependencies": {
-    "ioredis": "^5.9.2"
-  },
-  "devDependencies": {
-    "@types/ioredis": "^5.0.0"
-  }
-}
+Added to `.env.example`:
+```env
+# Exa Search API
+EXA_API_KEY=
 ```
 
-## Key Implementation Details
-
-### ConversationService
-
-**Methods:**
-- `addMessage(userId, role, content)` - Add message with auto-pruning and TTL reset
-- `getConversation(userId)` - Retrieve full conversation history
-- `clearConversation(userId)` - Delete conversation (for /newsession)
-- `pruneOldMessages(userId)` - Manual pruning (called automatically)
-- `refreshTTL(userId)` - Manual TTL refresh (called automatically)
-
-**Constants:**
-- `MESSAGE_LIMIT = 50` - Maximum messages per conversation
-- `TTL_SECONDS = 86400` - 24 hours in seconds
-
-### LlmService Updates
-
-**Before:**
-```typescript
-async generateResponse(userMessage: string): Promise<string>
+Already configured in `.env`:
+```env
+EXA_API_KEY=f93274cc-28d6-4db1-8a5d-d47957e3285f
 ```
 
-**After:**
-```typescript
-async generateResponse(
-  userMessage: string,
-  conversationHistory: ConversationMessage[] = []
-): Promise<string>
-```
+## Dependencies Installed
 
-**Changes:**
-- Accepts conversation history array
-- Maps history to Anthropic message format
-- Increased max_tokens: 1024 → 4096
-
-### Error Handling
-
-**Redis Connection:**
-- Retry strategy with exponential backoff
-- Console logging for connection events
-- Graceful shutdown on module destroy
-
-**Conversation Parsing:**
-- Try-catch for JSON parsing errors
-- Returns empty array on parse failure
-- Logs errors for debugging
-
-## Build & Deployment
-
-**Build:**
 ```bash
-bun run build
+bun add @nestjs/bullmq bullmq
+bun add -D @types/cron
 ```
 
-**Development:**
-```bash
-bun run dev
+## Redis Key Structure
+
+```
+# Task storage
+scheduled_task:{taskId}
+  → JSON of ScheduledTask object
+
+# User's task index (set)
+scheduled_tasks:user:{userId}
+  → Set of taskIds
+
+# Execution logs
+task_executions:{taskId}
+  → List of execution logs (LPUSH, LTRIM to 100)
+
+# Existing keys (unchanged)
+conversation:user:{userId}
+memory:user:{userId}:{key}
 ```
 
-**Production:**
+## Testing Guide
+
+### Test Web Search
+Send to bot:
+- "Search for latest TypeScript features"
+- "What's the weather in New York?"
+
+### Test One-Time Scheduling
+Send to bot:
+- "Remind me in 2 minutes to check the oven"
+- Wait 2 minutes for proactive message
+
+### Test Recurring Scheduling
+Send to bot:
+- "Send me 'Good morning!' every day at 8am"
+- Bot schedules with cron: `0 8 * * *`
+
+### Test Task Management
+Send to bot:
+- "Show me my scheduled tasks"
+- "Cancel task {taskId}"
+
+### Test Recovery After Restart
 ```bash
+# Stop bot (Ctrl+C)
+# Verify tasks in Redis
+docker exec murph-redis redis-cli KEYS "scheduled_task:*"
+
+# Restart bot
 bun run start
+
+# Check logs for "Recovering scheduled tasks from Redis..."
+# Verify tasks still execute
 ```
 
-## Performance Considerations
+## Cron Expression Examples
 
-**Memory:**
-- 50 messages × ~500 chars avg = ~25KB per user
-- 1000 active users = ~25MB Redis memory
-- TTL auto-cleanup prevents indefinite growth
+| Expression | Description |
+|------------|-------------|
+| `0 8 * * *` | Daily at 8:00 AM |
+| `0 20 * * *` | Daily at 8:00 PM |
+| `0 9 * * 1` | Every Monday at 9:00 AM |
+| `0 12 * * 1-5` | Weekdays at noon |
+| `*/30 * * * *` | Every 30 minutes |
+| `0 0 * * 0` | Every Sunday at midnight |
 
-**Latency:**
-- Redis GET: <1ms (local)
-- Redis SET: <1ms (local)
-- Negligible overhead vs LLM API call (~2-5s)
+## BullMQ Benefits
 
-**Scalability:**
-- Redis handles 100k+ ops/sec
-- Horizontal scaling via Redis Cluster (future)
-- Stateless bot instances (already achieved)
+- **Redis-native persistence**: Jobs stored in Redis automatically
+- **Built-in retry logic**: 3 attempts with exponential backoff
+- **Job management**: Query status, list jobs, remove programmatically
+- **Monitoring**: Job completion/failure events
+- **Production ready**: Battle-tested, used at scale
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    NestJS Application                        │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  LlmService (updated)                                       │
+│  ├─ web_search tool → calls ExaService                      │
+│  ├─ schedule_task tool → calls SchedulerService            │
+│  ├─ cancel_scheduled_task tool → calls SchedulerService    │
+│  └─ list_scheduled_tasks tool → calls SchedulerService     │
+│                                                              │
+│  ExaService (NEW)                                           │
+│  └─ Makes HTTP calls to Exa API                             │
+│                                                              │
+│  SchedulerService (NEW)                                     │
+│  ├─ Registers jobs with BullMQ queue                        │
+│  ├─ Stores task definitions in Redis                        │
+│  ├─ Recovers tasks on startup                               │
+│  └─ Manages task lifecycle                                  │
+│                                                              │
+│  TaskProcessor (NEW)                                        │
+│  ├─ BullMQ worker that executes jobs                        │
+│  └─ Calls BroadcastService to send messages                │
+│                                                              │
+│  BroadcastService (NEW)                                     │
+│  └─ Sends proactive messages using @InjectBot()            │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## Next Steps
+
+1. Start the bot: `bun run start`
+2. Test web search functionality
+3. Test scheduling features
+4. Monitor Redis for task storage
+5. Test bot restart recovery
+
+## Notes
+
+- Tasks are cleaned up after execution (one-time) or kept (recurring)
+- Failed tasks are retried up to 3 times with exponential backoff
+- Completed jobs are kept for 24 hours, failed jobs for 7 days
+- Execution logs are stored in Redis (last 100 per task)
