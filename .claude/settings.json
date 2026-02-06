@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "permissions": {
+    "defaultMode": "plan",
+    "allow": [
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__query-docs",
+
+      "mcp__dbhub__execute_sql",
+      "mcp__dbhub__search_objects",
+
+      "mcp__cclsp__find_definition",
+      "mcp__cclsp__find_references",
+      "mcp__cclsp__rename_symbol",
+      "mcp__cclsp__rename_symbol_strict",
+      "mcp__cclsp__get_diagnostics",
+      "mcp__cclsp__restart_server"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run lint:fix"
+          }
+        ]
+      }
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledPlugins": {
+    "ralph-loop@claude-plugins-official": true
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "servers": [
+    {
+      "extensions": ["js", "mjs", "cjs", "ts", "mts", "cts"],
+      "command": ["bun", "run", "typescript-language-server", "--stdio"],
+      "rootDir": "."
+    }
+  ]
+}
