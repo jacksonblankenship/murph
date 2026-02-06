@@ -1,15 +1,24 @@
+import Redis from 'ioredis';
 import { Command, Help, On, Start, Update } from 'nestjs-telegraf';
 import type { Context } from 'telegraf';
 import { BOT_MESSAGES } from '../common/constants';
+import { MessagesService } from '../messages/messages.service';
 import { ConversationService } from './conversation.service';
-import { LlmService } from './llm.service';
 
 @Update()
 export class BotUpdate {
+  private redis: Redis;
+
   constructor(
-    private readonly llmService: LlmService,
+    private readonly messagesService: MessagesService,
     private readonly conversationService: ConversationService,
-  ) {}
+  ) {
+    this.redis = new Redis({
+      host: process.env.REDIS_HOST || 'localhost',
+      port: Number.parseInt(process.env.REDIS_PORT || '6379', 10),
+      maxRetriesPerRequest: null,
+    });
+  }
 
   @Start()
   async start(ctx: Context) {
@@ -50,29 +59,35 @@ export class BotUpdate {
       }
 
       try {
-        // Send typing indicator
+        // Send typing indicator immediately
         await ctx.sendChatAction('typing');
 
-        // Get conversation history
-        const conversationHistory = await this.conversationService.getConversation(userId);
-
-        // Get LLM response with conversation context AND userId
-        const response = await this.llmService.generateResponse(
-          userMessage,
-          conversationHistory,
+        // Create queued message
+        const timestamp = Date.now();
+        const queuedMessage = {
           userId,
+          content: userMessage,
+          timestamp,
+          messageId: `${userId}-${ctx.message.message_id}`,
+          context: {
+            messageId: ctx.message.message_id,
+            chatId: ctx.chat.id,
+          },
+        };
+
+        // Store as pending message in Redis for batching
+        const pendingKey = `pending_user_message:${userId}:${timestamp}`;
+        await this.redis.set(
+          pendingKey,
+          JSON.stringify(queuedMessage),
+          'EX',
+          10, // 10 second TTL
         );
 
-        // Store user message in conversation history
-        await this.conversationService.addMessage(userId, 'user', userMessage);
-
-        // Store assistant response in conversation history
-        await this.conversationService.addMessage(userId, 'assistant', response);
-
-        // Send response
-        await ctx.reply(response);
+        // Queue the message with debounce delay
+        await this.messagesService.queueUserMessage(queuedMessage);
       } catch (error) {
-        console.error('Error processing message:', error);
+        console.error('Error queueing message:', error);
         await ctx.reply('Sorry, I encountered an error processing your message.');
       }
     }

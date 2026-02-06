@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TelegrafModule } from 'nestjs-telegraf';
 import { BotModule } from './bot/bot.module';
 import configuration from './config/configuration';
+import { MessagesModule } from './messages/messages.module';
 import { SchedulerModule } from './scheduler/scheduler.module';
 
 @Module({
@@ -20,6 +21,7 @@ import { SchedulerModule } from './scheduler/scheduler.module';
     }),
     BotModule,
     SchedulerModule,
+    MessagesModule,
   ],
 })
 export class AppModule {}

@@ -1,7 +1,8 @@
 import { BullModule } from '@nestjs/bullmq';
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TelegrafModule } from 'nestjs-telegraf';
+import { MessagesModule } from '../messages/messages.module';
 import { RedisModule } from '../redis/redis.module';
 import { BroadcastService } from './broadcast.service';
 import { SchedulerService } from './scheduler.service';
@@ -40,6 +41,7 @@ import { TaskProcessor } from './task.processor';
     RedisModule,
     TelegrafModule, // For @InjectBot()
     ConfigModule,
+    forwardRef(() => MessagesModule),
   ],
   providers: [SchedulerService, BroadcastService, TaskProcessor],
   exports: [SchedulerService, BroadcastService],

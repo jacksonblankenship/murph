@@ -40,7 +40,8 @@
       "Bash(bunx biome check:*)",
       "Bash(bun install:*)",
       "Bash(bun add:*)",
-      "Bash(bun remove:*)"
+      "Bash(bun remove:*)",
+      "Bash(npm run build:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

@@ -30,4 +30,26 @@ export class BroadcastService {
     }
     return false;
   }
+
+  async sendTypingIndicator(userId: number): Promise<boolean> {
+    try {
+      await this.bot.telegram.sendChatAction(userId, 'typing');
+      return true;
+    } catch (error) {
+      console.error(`Failed to send typing indicator to user ${userId}:`, error);
+      return false;
+    }
+  }
+
+  /**
+   * Notify user when a scheduled task fails to execute
+   */
+  async notifyTaskFailure(userId: number, taskId: string, errorMsg: string): Promise<boolean> {
+    const message = `⚠️ Scheduled Task Failed\n\n` +
+      `Task ID: ${taskId}\n` +
+      `Error: ${errorMsg}\n\n` +
+      `Please try rescheduling or contact support if this persists.`;
+
+    return await this.sendMessageWithRetry(userId, message);
+  }
 }

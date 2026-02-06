@@ -28,11 +28,13 @@ export class LlmService {
     userMessage: string,
     conversationHistory: ConversationMessage[] = [],
     userId = 0,
+    abortSignal?: AbortSignal,
   ): Promise<string> {
     try {
       const result = await generateText({
         model: this.model,
         maxOutputTokens: 4096,
+        abortSignal,
         messages: [
           ...conversationHistory.map((msg) => ({
             role: msg.role,
@@ -81,7 +83,11 @@ export class LlmService {
               'Schedule a task to be executed at a specific time or on a recurring basis. Use this when the user asks to be reminded, schedule something, or set up recurring notifications.',
             inputSchema: z.object({
               description: z.string().describe('Short description of what this task is for'),
-              message: z.string().describe('The message to send when the task executes'),
+              message: z
+                .string()
+                .describe(
+                  'The prompt/instruction for the LLM to process when the task executes. This will be processed fresh with full tool access (e.g., "Get current weather in Tokyo", "Summarize my calendar for today").',
+                ),
               scheduledTime: z
                 .string()
                 .optional()
@@ -124,10 +130,10 @@ export class LlmService {
               }
 
               if (cronExpression) {
-                return `✅ Recurring task scheduled!\n\nTask ID: ${result.taskId}\nSchedule: ${cronExpression}\nMessage: "${message}"\n\nI'll send you this message on the specified schedule.`;
+                return `✅ Recurring task scheduled!\n\nTask ID: ${result.taskId}\nSchedule: ${cronExpression}\nPrompt: "${message}"\n\nI'll process this prompt with fresh data on the specified schedule.`;
               } else {
                 const timeStr = new Date(timestamp).toLocaleString();
-                return `✅ Task scheduled!\n\nTask ID: ${result.taskId}\nScheduled for: ${timeStr}\nMessage: "${message}"\n\nI'll send you this message at the scheduled time.`;
+                return `✅ Task scheduled!\n\nTask ID: ${result.taskId}\nScheduled for: ${timeStr}\nPrompt: "${message}"\n\nI'll process this prompt with fresh data at the scheduled time.`;
               }
             },
           }),
@@ -190,6 +196,10 @@ export class LlmService {
 
       return result.text;
     } catch (error) {
+      // Handle abort error gracefully
+      if (error.name === 'AbortError') {
+        throw error; // Propagate to processor
+      }
       console.error('Error calling Anthropic API:', error);
       throw error;
     }
