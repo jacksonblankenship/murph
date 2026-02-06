@@ -1,9 +1,9 @@
 export const BOT_MESSAGES = {
-  START: `👋 Hello World! Welcome to the bot!
+  START: `👋 Hello! I'm an AI-powered Telegram bot!
 
-I'm a simple NestJS Telegram bot built with nestjs-telegraf.
+I'm built with NestJS and powered by Claude AI. I can have conversations with you about anything!
 
-Use /help to see available commands.`,
+Just send me a message and I'll respond. Use /help to see available commands.`,
 
   HELLO: 'Hello World! 🌍',
 
@@ -11,5 +11,7 @@ Use /help to see available commands.`,
 
 /start - Get a welcome message
 /hello - Say hello
-/help - Show this help message`,
+/help - Show this help message
+
+💬 Or just send me any message and I'll respond using AI!`,
 };

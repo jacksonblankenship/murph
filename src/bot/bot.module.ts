@@ -1,7 +1,10 @@
 import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 import { BotUpdate } from './bot.update';
+import { LlmService } from './llm.service';
 
 @Module({
-  providers: [BotUpdate],
+  imports: [ConfigModule],
+  providers: [BotUpdate, LlmService],
 })
 export class BotModule {}
