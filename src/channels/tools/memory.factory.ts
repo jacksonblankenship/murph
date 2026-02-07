@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type { Tool } from 'ai';
-import { createMemoryTools } from '../../ai/tools/memory.tools';
+import { createGardenTools } from '../../ai/tools/memory.tools';
 import { ObsidianService } from '../../obsidian/obsidian.service';
 import { IndexSyncProcessor } from '../../sync/index-sync.processor';
 import { EmbeddingService } from '../../vector/embedding.service';
@@ -8,9 +8,9 @@ import { QdrantService } from '../../vector/qdrant.service';
 import type { ToolDependencies, ToolFactory } from '../channel.types';
 
 /**
- * Factory for memory-related tools.
+ * Factory for digital garden tools.
  *
- * Creates tools for saving, recalling, and managing long-term memories
+ * Creates tools for planting, tending, and cultivating knowledge
  * stored in Obsidian and indexed in Qdrant.
  */
 @Injectable()
@@ -23,7 +23,7 @@ export class MemoryToolFactory implements ToolFactory {
   ) {}
 
   create(_deps: ToolDependencies): Record<string, Tool> {
-    return createMemoryTools({
+    return createGardenTools({
       obsidianService: this.obsidianService,
       embeddingService: this.embeddingService,
       qdrantService: this.qdrantService,

@@ -6,6 +6,7 @@ import { MurLock } from 'murlock';
 import { firstValueFrom } from 'rxjs';
 import {
   ObsidianNote,
+  ObsidianNoteJsonSchema,
   ObsidianNoteListSchema,
   ObsidianSearchResponseSchema,
   ObsidianSearchResult,
@@ -68,6 +69,46 @@ export class ObsidianService {
         return null;
       }
       this.logger.error(`Error reading note ${path}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Gets the last modification date of a note from Obsidian's file metadata.
+   * Uses the JSON response format from the Local REST API to get stat info.
+   */
+  async getModifiedDate(path: string): Promise<Date | null> {
+    try {
+      const normalizedPath = path.endsWith('.md') ? path : `${path}.md`;
+      const url = `${this.apiUrl}/vault/${encodeURIComponent(normalizedPath)}`;
+
+      const response = await firstValueFrom(
+        this.httpService.get(url, {
+          headers: {
+            Authorization: `Bearer ${this.apiKey}`,
+            Accept: 'application/vnd.olrapi.note+json',
+          },
+        }),
+      );
+
+      const result = ObsidianNoteJsonSchema.safeParse(response.data);
+      if (!result.success) {
+        this.logger.error(
+          `Invalid note JSON response for ${path}:`,
+          result.error.message,
+        );
+        return null;
+      }
+
+      return new Date(result.data.stat.mtime);
+    } catch (error) {
+      if (error instanceof AxiosError && error.response?.status === 404) {
+        return null;
+      }
+      this.logger.error(
+        `Error getting modified date for ${path}:`,
+        error.message,
+      );
       throw error;
     }
   }

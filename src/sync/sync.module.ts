@@ -45,6 +45,6 @@ import { IndexSyncProcessor } from './index-sync.processor';
     ),
   ],
   providers: [IndexSyncProcessor, GardenTenderProcessor],
-  exports: [IndexSyncProcessor],
+  exports: [IndexSyncProcessor, GardenTenderProcessor],
 })
 export class SyncModule {}

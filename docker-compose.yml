@@ -8,6 +8,8 @@ services:
       - REDIS_HOST=redis
       - QDRANT_URL=http://qdrant:6333
       - OBSIDIAN_API_URL=http://obsidian:27123
+      # Uncomment for readable logs during local development:
+      - LOG_PRETTY=true
     depends_on:
       redis:
         condition: service_healthy

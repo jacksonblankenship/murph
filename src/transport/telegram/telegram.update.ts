@@ -6,6 +6,7 @@ import { type Context, Telegraf } from 'telegraf';
 import { BOT_MESSAGES } from '../../common/constants';
 import { Events, type UserMessageEvent } from '../../common/events';
 import { ConversationService } from '../../memory/conversation.service';
+import { GardenTenderProcessor } from '../../sync/garden-tender.processor';
 
 @Update()
 export class TelegramUpdate implements OnModuleInit {
@@ -15,6 +16,7 @@ export class TelegramUpdate implements OnModuleInit {
     @InjectBot() private readonly bot: Telegraf<Context>,
     private readonly conversationService: ConversationService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly gardenTenderProcessor: GardenTenderProcessor,
   ) {}
 
   async onModuleInit() {
@@ -22,6 +24,7 @@ export class TelegramUpdate implements OnModuleInit {
       { command: 'start', description: 'Welcome message' },
       { command: 'help', description: 'Show available commands' },
       { command: 'clear', description: 'Clear conversation history' },
+      { command: 'tend', description: 'Trigger garden maintenance' },
     ]);
     this.logger.log('Bot commands registered');
   }
@@ -46,6 +49,19 @@ export class TelegramUpdate implements OnModuleInit {
     const userId = ctx.from.id;
     await this.conversationService.clearConversation(userId);
     await ctx.reply(BOT_MESSAGES.CLEAR);
+  }
+
+  @Command('tend')
+  async tend(ctx: Context) {
+    if (!ctx.from) {
+      await ctx.reply('Unable to identify user.');
+      return;
+    }
+
+    await this.gardenTenderProcessor.triggerManualTending();
+    await ctx.reply(
+      "Starting garden tending... I'll work on this in the background.",
+    );
   }
 
   @On('text')
