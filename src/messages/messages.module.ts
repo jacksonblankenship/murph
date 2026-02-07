@@ -6,6 +6,7 @@ import { AiModule } from '../ai/ai.module';
 import { ChannelModule } from '../channels/channel.module';
 import { MemoryModule } from '../memory/memory.module';
 import { RedisModule } from '../redis/redis.module';
+import { TelegramModule } from '../transport/telegram/telegram.module';
 import { MessageOrchestrator } from './message.orchestrator';
 import { MessagesService } from './messages.service';
 import { ScheduledMessageProcessor } from './scheduled-message.processor';
@@ -28,6 +29,7 @@ import { ScheduledTaskHandler } from './scheduled-task.handler';
     MemoryModule,
     AiModule,
     ChannelModule,
+    TelegramModule,
     BullModule.registerQueue({
       name: 'scheduled-messages',
       defaultJobOptions: {

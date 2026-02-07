@@ -11,6 +11,9 @@ describe('ScheduledMessageProcessor', () => {
     execute: ReturnType<typeof mock>;
   };
   let mockRedis: ReturnType<typeof createMockRedis>;
+  let mockBroadcastService: {
+    withTypingIndicator: ReturnType<typeof mock>;
+  };
 
   const testMessage: QueuedScheduledMessage = {
     userId: 123,
@@ -39,11 +42,18 @@ describe('ScheduledMessageProcessor', () => {
         }),
       ),
     };
+    mockBroadcastService = {
+      // Execute the function passed to withTypingIndicator immediately
+      withTypingIndicator: mock((chatId: number, fn: () => Promise<unknown>) =>
+        fn(),
+      ),
+    };
     const mockRedisService = { getClient: () => mockRedis };
 
     processor = new ScheduledMessageProcessor(
       mockChannelOrchestrator as never,
       mockRedisService as never,
+      mockBroadcastService as never,
     );
   });
 

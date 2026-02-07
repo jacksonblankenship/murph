@@ -8,6 +8,7 @@ import {
   type MessageBroadcastEvent,
   type UserMessageEvent,
 } from '../common/events';
+import { BroadcastService } from '../transport/telegram/broadcast.service';
 
 interface PendingMessage {
   text: string;
@@ -40,6 +41,7 @@ export class MessageOrchestrator implements OnModuleDestroy {
     private readonly channelOrchestrator: ChannelOrchestratorService,
     private readonly eventEmitter: EventEmitter2,
     private readonly clsService: AppClsService,
+    private readonly broadcastService: BroadcastService,
   ) {}
 
   onModuleDestroy() {
@@ -118,18 +120,20 @@ export class MessageOrchestrator implements OnModuleDestroy {
     this.abortControllers.set(userId, abortController);
 
     try {
-      // Execute through channel orchestrator
+      // Execute through channel orchestrator with typing indicator
       // The channel handles: enrichment, history, LLM call, conversation storage, output
-      await this.channelOrchestrator.execute(
-        USER_DIRECT_CHANNEL_ID,
-        {
-          message: combinedContent,
-          userId,
-          chatId,
-        },
-        {
-          abortSignal: abortController.signal,
-        },
+      await this.broadcastService.withTypingIndicator(chatId, () =>
+        this.channelOrchestrator.execute(
+          USER_DIRECT_CHANNEL_ID,
+          {
+            message: combinedContent,
+            userId,
+            chatId,
+          },
+          {
+            abortSignal: abortController.signal,
+          },
+        ),
       );
 
       // Clear abort controller on success

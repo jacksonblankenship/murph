@@ -58,4 +58,36 @@ export class BroadcastService {
 
     return await this.sendMessageWithRetry(userId, message);
   }
+
+  /**
+   * Execute an async function while keeping the typing indicator active.
+   * Refreshes the typing indicator every 4 seconds until the function completes.
+   *
+   * Telegram's typing indicator only lasts ~5 seconds, so this ensures users
+   * see continuous activity during long-running LLM operations.
+   *
+   * @param chatId - The chat ID to send typing indicators to
+   * @param fn - The async function to execute
+   * @returns The result of the async function
+   */
+  async withTypingIndicator<T>(
+    chatId: number,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    // Send initial typing indicator
+    await this.sendTypingIndicator(chatId);
+
+    // Refresh every 4 seconds (Telegram typing lasts ~5s)
+    const interval = setInterval(() => {
+      this.sendTypingIndicator(chatId).catch(() => {
+        // Ignore errors - best effort
+      });
+    }, 4000);
+
+    try {
+      return await fn();
+    } finally {
+      clearInterval(interval);
+    }
+  }
 }

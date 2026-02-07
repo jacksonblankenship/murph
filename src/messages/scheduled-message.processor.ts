@@ -4,6 +4,7 @@ import { Job } from 'bullmq';
 import { ChannelOrchestratorService } from '../channels/channel-orchestrator.service';
 import { SCHEDULED_PROACTIVE_CHANNEL_ID } from '../channels/presets/scheduled.preset';
 import { RedisService } from '../redis/redis.service';
+import { BroadcastService } from '../transport/telegram/broadcast.service';
 import { ActiveRequestData, QueuedScheduledMessage } from './message.schemas';
 
 /**
@@ -23,6 +24,7 @@ export class ScheduledMessageProcessor extends WorkerHost {
   constructor(
     private readonly channelOrchestrator: ChannelOrchestratorService,
     private readonly redisService: RedisService,
+    private readonly broadcastService: BroadcastService,
   ) {
     super();
   }
@@ -41,17 +43,19 @@ export class ScheduledMessageProcessor extends WorkerHost {
       // Mark SCHEDULED request as active (separate from user)
       await this.setActiveScheduledRequest(message.userId, job.id);
 
-      // Execute through channel orchestrator with proactive channel
+      // Execute through channel orchestrator with proactive channel and typing indicator
       // The channel handles: transformation, enrichment, LLM call, storage, output
-      await this.channelOrchestrator.execute(
-        SCHEDULED_PROACTIVE_CHANNEL_ID,
-        {
-          message: message.content,
-          userId: message.userId,
-          scheduledTime: new Date(),
-          taskId: message.taskId,
-        },
-        // No abort signal - scheduled messages run to completion
+      await this.broadcastService.withTypingIndicator(message.userId, () =>
+        this.channelOrchestrator.execute(
+          SCHEDULED_PROACTIVE_CHANNEL_ID,
+          {
+            message: message.content,
+            userId: message.userId,
+            scheduledTime: new Date(),
+            taskId: message.taskId,
+          },
+          // No abort signal - scheduled messages run to completion
+        ),
       );
 
       this.logger.log(
