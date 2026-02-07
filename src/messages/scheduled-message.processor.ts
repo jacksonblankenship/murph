@@ -1,35 +1,34 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
-import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Job } from 'bullmq';
-import { ChatOrchestratorService } from '../ai/chat-orchestrator.service';
-import { AppClsService } from '../common/cls.service';
-import { Events, type MessageBroadcastEvent } from '../common/events';
-import type { ConversationMessage } from '../memory/conversation.schemas';
-import { ConversationService } from '../memory/conversation.service';
+import { ChannelOrchestratorService } from '../channels/channel-orchestrator.service';
+import { SCHEDULED_PROACTIVE_CHANNEL_ID } from '../channels/presets/scheduled.preset';
 import { RedisService } from '../redis/redis.service';
 import { ActiveRequestData, QueuedScheduledMessage } from './message.schemas';
 
+/**
+ * Processes scheduled messages through the proactive channel.
+ *
+ * Uses the 'scheduled-proactive' channel which:
+ * - Transforms messages with proactive framing
+ * - Enriches with memory and history context
+ * - Uses time, memory, and web search tools (no scheduling tools)
+ * - Outputs via Telegram
+ */
 @Processor('scheduled-messages')
 @Injectable()
 export class ScheduledMessageProcessor extends WorkerHost {
   private readonly logger = new Logger(ScheduledMessageProcessor.name);
 
   constructor(
-    private readonly chatOrchestrator: ChatOrchestratorService,
-    private readonly conversationService: ConversationService,
+    private readonly channelOrchestrator: ChannelOrchestratorService,
     private readonly redisService: RedisService,
-    private readonly eventEmitter: EventEmitter2,
-    private readonly clsService: AppClsService,
   ) {
     super();
   }
 
   async process(job: Job<QueuedScheduledMessage>): Promise<void> {
     const message = job.data;
-
-    // Set user context in CLS for downstream services
-    this.clsService.setUserId(message.userId);
 
     this.logger.log(
       `Processing task ${message.taskId} for user ${message.userId}`,
@@ -39,42 +38,28 @@ export class ScheduledMessageProcessor extends WorkerHost {
     try {
       // NO ABORT CHECKING - scheduled messages always run to completion
 
-      // 1. Get conversation history
-      const history = await this.conversationService.getConversation(
-        message.userId,
-      );
-
-      // 2. Mark SCHEDULED request as active (separate from user)
+      // Mark SCHEDULED request as active (separate from user)
       await this.setActiveScheduledRequest(message.userId, job.id);
 
-      // 3. Generate LLM response with tools (userId comes from CLS context)
-      const response = await this.chatOrchestrator.generateResponse(
-        message.content,
-        history,
-        // NO ABORT SIGNAL
+      // Execute through channel orchestrator with proactive channel
+      // The channel handles: transformation, enrichment, LLM call, storage, output
+      await this.channelOrchestrator.execute(
+        SCHEDULED_PROACTIVE_CHANNEL_ID,
+        {
+          message: message.content,
+          userId: message.userId,
+          scheduledTime: new Date(),
+          taskId: message.taskId,
+        },
+        // No abort signal - scheduled messages run to completion
       );
 
       this.logger.log(
-        `LLM generated ${response.text.length} chars for task ${message.taskId}`,
+        `Completed task ${message.taskId} for user ${message.userId}`,
       );
 
-      // 4. Clear active request
+      // Clear active request
       await this.clearActiveScheduledRequest(message.userId);
-
-      // 5. Store in conversation history (system note + response messages in SDK format)
-      await this.conversationService.addMessages(message.userId, [
-        { role: 'user', content: `[Scheduled: ${message.content}]` },
-        ...(response.messages as ConversationMessage[]),
-      ]);
-
-      // 6. Emit broadcast event to send response to user
-      const broadcastEvent: MessageBroadcastEvent = {
-        userId: message.userId,
-        content: response.text,
-      };
-      this.eventEmitter.emit(Events.MESSAGE_BROADCAST, broadcastEvent);
-
-      this.logger.log(`Emitted broadcast for user ${message.userId}`);
     } catch (error) {
       this.logger.error('Failed to process scheduled message:', {
         userId: message.userId,

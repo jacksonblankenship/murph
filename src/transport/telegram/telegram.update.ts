@@ -3,7 +3,6 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectBot } from 'nestjs-telegraf';
 import { Command, Help, On, Start, Update } from 'nestjs-telegraf';
 import { type Context, Telegraf } from 'telegraf';
-import { AppClsService } from '../../common/cls.service';
 import { BOT_MESSAGES } from '../../common/constants';
 import { Events, type UserMessageEvent } from '../../common/events';
 import { ConversationService } from '../../memory/conversation.service';
@@ -16,7 +15,6 @@ export class TelegramUpdate implements OnModuleInit {
     @InjectBot() private readonly bot: Telegraf<Context>,
     private readonly conversationService: ConversationService,
     private readonly eventEmitter: EventEmitter2,
-    private readonly clsService: AppClsService,
   ) {}
 
   async onModuleInit() {
@@ -62,10 +60,6 @@ export class TelegramUpdate implements OnModuleInit {
     if (userMessage.startsWith('/')) {
       return;
     }
-
-    // Set user context in CLS for downstream services
-    this.clsService.setUserId(ctx.from.id);
-    this.clsService.setChatId(ctx.chat.id);
 
     try {
       // Send typing indicator immediately

@@ -3,6 +3,7 @@ import { BullBoardModule } from '@bull-board/nestjs';
 import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
 import { AiModule } from '../ai/ai.module';
+import { ChannelModule } from '../channels/channel.module';
 import { MemoryModule } from '../memory/memory.module';
 import { RedisModule } from '../redis/redis.module';
 import { MessageOrchestrator } from './message.orchestrator';
@@ -26,6 +27,7 @@ import { ScheduledTaskHandler } from './scheduled-task.handler';
     RedisModule,
     MemoryModule,
     AiModule,
+    ChannelModule,
     BullModule.registerQueue({
       name: 'scheduled-messages',
       defaultJobOptions: {

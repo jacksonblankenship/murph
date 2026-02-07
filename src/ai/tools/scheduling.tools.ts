@@ -1,19 +1,17 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import type { AppClsService } from '../../common/cls.service';
 import type { SchedulerService } from '../../scheduler/scheduler.service';
 
+/**
+ * Creates scheduling tools for task management.
+ *
+ * @param schedulerService The scheduler service for managing tasks
+ * @param userId The user ID for the current request
+ */
 export function createSchedulingTools(
   schedulerService: SchedulerService,
-  clsService: AppClsService,
+  userId: number,
 ) {
-  const getUserId = () => {
-    const userId = clsService.getUserId();
-    if (userId === undefined) {
-      throw new Error('userId not available in CLS context');
-    }
-    return userId;
-  };
   return {
     schedule_task: tool({
       description:
@@ -59,7 +57,7 @@ export function createSchedulingTools(
         }
 
         const result = await schedulerService.scheduleTask(
-          getUserId(),
+          userId,
           description,
           message,
           {
@@ -87,7 +85,7 @@ export function createSchedulingTools(
         taskId: z.string().describe('The task ID to cancel'),
       }),
       execute: async ({ taskId }) => {
-        const result = await schedulerService.cancelTask(taskId, getUserId());
+        const result = await schedulerService.cancelTask(taskId, userId);
 
         if (!result.cancelled) {
           return `Failed to cancel task: ${result.error}`;
@@ -101,7 +99,7 @@ export function createSchedulingTools(
       description: 'List all scheduled tasks for the current user',
       inputSchema: z.object({}),
       execute: async () => {
-        const tasks = await schedulerService.listUserTasks(getUserId());
+        const tasks = await schedulerService.listUserTasks(userId);
 
         if (tasks.length === 0) {
           return 'You have no scheduled tasks.';

@@ -2,7 +2,6 @@ import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Job } from 'bullmq';
-import { AppClsService } from '../common/cls.service';
 import {
   Events,
   type MessageBroadcastEvent,
@@ -18,16 +17,12 @@ export class TaskProcessor extends WorkerHost {
   constructor(
     private readonly redisService: RedisService,
     private readonly eventEmitter: EventEmitter2,
-    private readonly clsService: AppClsService,
   ) {
     super();
   }
 
   async process(job: Job<ScheduledTask>): Promise<void> {
     const task = job.data;
-
-    // Set user context in CLS for downstream services
-    this.clsService.setUserId(task.userId);
 
     this.logger.log(
       `Processing task ${task.id} (${task.type}) for user ${task.userId}`,

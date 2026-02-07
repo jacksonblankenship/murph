@@ -1,16 +1,13 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
-import { ChatOrchestratorService } from '../ai/chat-orchestrator.service';
+import { ChannelOrchestratorService } from '../channels/channel-orchestrator.service';
+import { USER_DIRECT_CHANNEL_ID } from '../channels/presets/user-direct.preset';
 import { AppClsService } from '../common/cls.service';
 import {
   Events,
   type MessageBroadcastEvent,
   type UserMessageEvent,
 } from '../common/events';
-import type { ConversationMessage } from '../memory/conversation.schemas';
-import { ConversationService } from '../memory/conversation.service';
-import { MemorySearchService } from '../memory/memory-search.service';
-import { RedisService } from '../redis/redis.service';
 
 interface PendingMessage {
   text: string;
@@ -26,7 +23,8 @@ interface PendingMessage {
  * 2. Debounce for 2 seconds before processing
  * 3. If a new message arrives during LLM processing, abort and restart
  *
- * This replaces the BullMQ-based UserMessageProcessor with simpler in-memory logic.
+ * Delegates actual LLM processing to the channel orchestrator using the
+ * 'user-direct' channel.
  */
 @Injectable()
 export class MessageOrchestrator implements OnModuleDestroy {
@@ -39,10 +37,7 @@ export class MessageOrchestrator implements OnModuleDestroy {
   private readonly DEBOUNCE_MS = 2000;
 
   constructor(
-    private readonly chatOrchestrator: ChatOrchestratorService,
-    private readonly conversationService: ConversationService,
-    private readonly memorySearchService: MemorySearchService,
-    private readonly redisService: RedisService,
+    private readonly channelOrchestrator: ChannelOrchestratorService,
     private readonly eventEmitter: EventEmitter2,
     private readonly clsService: AppClsService,
   ) {}
@@ -123,40 +118,22 @@ export class MessageOrchestrator implements OnModuleDestroy {
     this.abortControllers.set(userId, abortController);
 
     try {
-      // Get conversation history
-      const history = await this.conversationService.getConversation(userId);
-
-      // Search for relevant long-term memory context
-      const memoryContext =
-        await this.memorySearchService.recallRelevantContext(combinedContent);
-
-      // Build message with memory context if available
-      const enrichedMessage = memoryContext
-        ? `${combinedContent}\n\n[Relevant memory context from your notes:]\n${memoryContext}`
-        : combinedContent;
-
-      // Generate LLM response with abort signal (userId comes from CLS context)
-      const response = await this.chatOrchestrator.generateResponse(
-        enrichedMessage,
-        history,
-        abortController.signal,
+      // Execute through channel orchestrator
+      // The channel handles: enrichment, history, LLM call, conversation storage, output
+      await this.channelOrchestrator.execute(
+        USER_DIRECT_CHANNEL_ID,
+        {
+          message: combinedContent,
+          userId,
+          chatId,
+        },
+        {
+          abortSignal: abortController.signal,
+        },
       );
 
       // Clear abort controller on success
       this.abortControllers.delete(userId);
-
-      // Store in conversation history
-      await this.conversationService.addMessages(userId, [
-        { role: 'user', content: combinedContent },
-        ...(response.messages as ConversationMessage[]),
-      ]);
-
-      // Emit broadcast event to send response to user
-      const broadcastEvent: MessageBroadcastEvent = {
-        userId,
-        content: response.text,
-      };
-      this.eventEmitter.emit(Events.MESSAGE_BROADCAST, broadcastEvent);
     } catch (error) {
       if (error.name === 'AbortError') {
         this.logger.log(

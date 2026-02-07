@@ -1,6 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { ModelMessage } from 'ai';
-import { AppClsService } from '../common/cls.service';
 import { ExaService } from '../exa/exa.service';
 import type { ConversationMessage } from '../memory/conversation.schemas';
 import { ObsidianService } from '../obsidian/obsidian.service';
@@ -8,7 +7,7 @@ import { SchedulerService } from '../scheduler/scheduler.service';
 import { IndexSyncProcessor } from '../sync/index-sync.processor';
 import { EmbeddingService } from '../vector/embedding.service';
 import { QdrantService } from '../vector/qdrant.service';
-import { type LlmResponse, LlmService } from './llm.service';
+import { LlmService } from './llm.service';
 import { createMemoryTools } from './tools/memory.tools';
 import { createSchedulingTools } from './tools/scheduling.tools';
 import { createTimeTools } from './tools/time.tools';
@@ -52,15 +51,23 @@ export class ChatOrchestratorService {
     private readonly embeddingService: EmbeddingService,
     private readonly qdrantService: QdrantService,
     private readonly indexSyncProcessor: IndexSyncProcessor,
-    private readonly clsService: AppClsService,
   ) {}
 
+  /**
+   * Generate a response to a user message.
+   *
+   * @param userMessage The user's message
+   * @param userId The user ID for the current request
+   * @param conversationHistory Previous conversation messages
+   * @param abortSignal Optional signal to abort the request
+   */
   async generateResponse(
     userMessage: string,
+    userId: number,
     conversationHistory: ConversationMessage[] = [],
     abortSignal?: AbortSignal,
   ): Promise<ChatResponse> {
-    const tools = this.buildTools();
+    const tools = this.buildTools(userId);
 
     const response = await this.llmService.generate({
       system: this.systemPrompt,
@@ -89,7 +96,7 @@ export class ChatOrchestratorService {
     };
   }
 
-  private buildTools() {
+  private buildTools(userId: number) {
     return {
       ...createTimeTools(),
       ...createWebSearchTools(this.exaService),
@@ -99,7 +106,7 @@ export class ChatOrchestratorService {
         qdrantService: this.qdrantService,
         indexSyncProcessor: this.indexSyncProcessor,
       }),
-      ...createSchedulingTools(this.schedulerService, this.clsService),
+      ...createSchedulingTools(this.schedulerService, userId),
     };
   }
 }

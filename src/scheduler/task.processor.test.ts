@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { Job } from 'bullmq';
 import { Events } from '../common/events';
-import { createMockClsService } from '../test/mocks/cls.mock';
 import { createMockRedis } from '../test/mocks/redis.mock';
 import { TaskProcessor } from './task.processor';
 import { type ScheduledTask, TaskType } from './task.schemas';
@@ -10,7 +9,6 @@ describe('TaskProcessor', () => {
   let processor: TaskProcessor;
   let mockRedis: ReturnType<typeof createMockRedis>;
   let mockEventEmitter: { emit: ReturnType<typeof mock> };
-  let mockClsService: ReturnType<typeof createMockClsService>;
 
   function createMockJob(task: ScheduledTask): Job<ScheduledTask> {
     return {
@@ -21,7 +19,6 @@ describe('TaskProcessor', () => {
 
   beforeEach(() => {
     mockRedis = createMockRedis();
-    mockClsService = createMockClsService();
     mockEventEmitter = {
       emit: mock(() => true),
     };
@@ -33,7 +30,6 @@ describe('TaskProcessor', () => {
     processor = new TaskProcessor(
       mockRedisService as never,
       mockEventEmitter as never,
-      mockClsService as never,
     );
   });
 
