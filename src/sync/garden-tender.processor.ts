@@ -186,8 +186,15 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
         continue;
       }
 
-      // Candidate if: never tended, OR modified after last tending
-      if (!lastTended || lastModified > lastTended) {
+      // Add 1 minute tolerance to account for the time between capturing
+      // the timestamp and writing the file (which updates mtime)
+      const toleranceMs = 60 * 1000;
+      const lastTendedWithTolerance = lastTended
+        ? lastTended.getTime() + toleranceMs
+        : 0;
+
+      // Candidate if: never tended, OR modified significantly after last tending
+      if (!lastTended || lastModified.getTime() > lastTendedWithTolerance) {
         candidates.push({
           path: note.path,
           content: note.content,
@@ -285,12 +292,16 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
   /**
    * Normalizes frontmatter to ensure consistent keys and ordering.
    * Order: planted → maturity → last-tended → (any custom keys)
+   *
+   * @param existing - Existing frontmatter data
+   * @param tendedAt - Full ISO timestamp for last-tended (also used as date for planted if missing)
    */
   private normalizeFrontmatter(
     existing: Record<string, unknown>,
-    today: string,
+    tendedAt: string,
   ): Record<string, unknown> {
     const standardKeys = ['planted', 'maturity', 'last-tended'];
+    const plantedDate = tendedAt.split('T')[0]; // Date portion for planted
 
     // Extract custom keys (anything not in our standard set)
     const customEntries = Object.entries(existing).filter(
@@ -298,9 +309,9 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
     );
 
     return {
-      planted: existing.planted || today,
+      planted: existing.planted || plantedDate,
       maturity: existing.maturity || 'seedling',
-      'last-tended': existing['last-tended'] || today,
+      'last-tended': tendedAt, // Always update to current timestamp
       ...Object.fromEntries(customEntries),
     };
   }
@@ -316,15 +327,17 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
   ): Promise<void> {
     this.logger.log(`Tending: ${candidate.path}`);
 
-    const today = new Date().toISOString().split('T')[0];
+    // Full ISO timestamp for last-tended comparisons
+    const tendedAt = new Date().toISOString();
+    const todayDate = tendedAt.split('T')[0];
 
     // Find broken links in this specific note
     const noteBrokenLinks = brokenLinks.filter(
       bl => bl.notePath === candidate.path,
     );
 
-    // Build focused context for this note
-    const noteContext = this.buildNoteContext(
+    // Build focused context for this note (includes similar notes search)
+    const noteContext = await this.buildNoteContext(
       candidate,
       garden,
       noteBrokenLinks,
@@ -333,38 +346,54 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
     await generateText({
       model: this.model,
       maxOutputTokens: 8192,
-      system: this.buildCuratorPrompt(today),
+      system: this.buildCuratorPrompt(todayDate),
       messages: [
         {
           role: 'user',
           content: noteContext,
         },
       ],
-      tools: this.buildTools(today, garden),
+      tools: this.buildTools(tendedAt, garden),
       stopWhen: stepCountIs(20),
     });
 
-    // After tending, update ONLY this note's last-tended
-    await this.markAsTended(candidate.path, today);
+    // After tending, update ONLY this note's last-tended with full timestamp
+    await this.markAsTended(candidate.path, tendedAt);
   }
 
   /**
    * Builds focused context for tending a single note.
+   * Includes similar notes from vector search for deduplication.
    */
-  private buildNoteContext(
+  private async buildNoteContext(
     candidate: TendingCandidate,
     garden: NoteMetadata[],
     brokenLinks: BrokenLink[],
-  ): string {
+  ): Promise<string> {
     const parsed = matter(candidate.content);
     const noteMetadata = garden.find(n => n.path === candidate.path);
 
+    // Find similar notes for deduplication context
+    let similarNotesSection = '';
+    try {
+      const embedding = await this.embeddingService.embed(parsed.content);
+      const similarNotes = await this.qdrantService.searchSimilar(embedding, 5);
+      const filtered = similarNotes.filter(
+        s => s.path !== candidate.path && s.score > 0.7,
+      );
+      if (filtered.length > 0) {
+        similarNotesSection = `
+## Similar Notes (check for duplicates)
+${filtered.map(s => `- ${s.path} (${(s.score * 100).toFixed(0)}% similar)`).join('\n')}
+`;
+      }
+    } catch {
+      // If embedding fails, continue without similar notes
+    }
+
     // Get list of all existing notes for linking context
     const existingNotes = garden
-      .map(n => {
-        const title = n.path.replace(/\.md$/, '').split('/').pop();
-        return `- ${n.path} [${n.maturity || 'seedling'}]`;
-      })
+      .map(n => `- ${n.path} [${n.maturity || 'seedling'}]`)
       .join('\n');
 
     let context = `# Note to Tend: ${candidate.path}
@@ -381,6 +410,10 @@ ${parsed.content}
 - Last tended: ${candidate.lastTended?.toISOString().split('T')[0] || 'never'}
 `;
 
+    if (similarNotesSection) {
+      context += similarNotesSection;
+    }
+
     if (brokenLinks.length > 0) {
       context += `
 ## Broken Links in This Note
@@ -393,19 +426,18 @@ ${brokenLinks.map(bl => `- [[${bl.brokenLink}]] - does not exist`).join('\n')}
 ${existingNotes}
 
 ## Your Task
-Review this note and take appropriate actions:
-1. Add inline [[wikilinks]] where concepts from other notes are mentioned
-2. Fix or remove broken links
-3. If this note covers multiple concepts, consider splitting it
-4. If content overlaps with another note, consider merging
-5. Promote maturity if well-linked
+1. Check "Similar Notes" above - merge any that cover the same concept
+2. Add inline [[wikilinks]] where concepts from other notes are mentioned
+3. Fix or remove broken links
+4. If this note covers multiple concepts, check find_similar before splitting
+5. Promote maturity if well-linked and thorough
 `;
 
     return context;
   }
 
   /**
-   * Builds the curator prompt with new intelligent instructions.
+   * Builds the curator prompt with preservation and brevity guardrails.
    */
   private buildCuratorPrompt(today: string): string {
     return `You are a digital garden curator performing intelligent maintenance.
@@ -415,21 +447,55 @@ Review this note and take appropriate actions:
 - **CONCEPT-ORIENTED**: Organize by idea, not by source/person.
 - **DENSELY LINKED**: Add [[wikilinks]] INLINE where concepts are mentioned, not in separate "Related" sections.
 
+## Preservation Rules (CRITICAL)
+- ONLY USE content that exists in the notes - do not add context, examples, or explanations
+- NEVER invent relationships between concepts - only link when content explicitly supports it
+- When merging, combine existing text with minimal transitions - do not elaborate
+- When splitting, extract exact content - do not expand on ideas that were briefly mentioned
+- When creating notes for broken links, create minimal stubs - not full articles
+- Preserve the author's voice and specificity - do not generalize or smooth over details
+
+## Brevity Rules
+- Notes should be as short as they need to be - no padding or filler
+- If a note repeats the same point multiple ways, condense to the clearest version
+- Remove redundant sentences that add no new information
+- One clear statement is better than three vague ones
+- State the fact and move on - don't belabor the point
+
+## Formatting Rules
+- NEVER add H1 headers (#) - Obsidian notes get their title from the filename
+- If a note starts with an H1 that matches or resembles the filename, remove it
+- Start note content directly or with H2 (##) if sections are needed
+
+## Date Context Rules
+- Ephemeral moments (events, experiences, things that happened) should include a date
+- Can be shorthand like "Feb 2025" or "early 2024" - just enough to place it in time
+- General/timeless notes (concepts, preferences, facts) don't need dates
+- If content describes something that happened but has no temporal context, add one
+
+## Deduplication Workflow
+Before making changes, check the "Similar Notes" section below. If any note is >80% similar:
+1. Read both notes with read_note
+2. If they cover the same concept, use merge_notes to consolidate
+3. If they cover related but distinct concepts, ensure they link to each other
+
+When splitting a note:
+1. First use find_similar to check if the extracted concept already exists
+2. If it does, link to the existing note instead of creating a duplicate
+
 ## Your Tools
 
 ### read_note
 ALWAYS read notes before modifying them. Never guess at content.
 
 ### rewrite_note
-Rewrite a note to:
+Reorganize and condense existing content - remove redundancy, keep it tight.
 - Add inline [[wikilinks]] where other notes are referenced
 - Restructure for clarity
 - Fix broken links by removing or correcting them
 
 ### merge_notes
-When notes cover the same concept, SYNTHESIZE them into one coherent note:
-- Combine all unique information
-- Remove redundancy
+Combine their explicit content with minimal transitions. Remove redundancy.
 - The result must read naturally - NO "merged from" markers or separators
 - You provide the merged content directly
 
@@ -440,7 +506,7 @@ When a note covers multiple distinct concepts, split it:
 - Delete or update the original
 
 ### create_note
-Create missing notes when a broken link points to a concept that should exist.
+Create a minimal stub note ONLY when explicitly referenced by a broken link.
 
 ### delete_note
 Remove truly empty or obsolete notes.
@@ -448,12 +514,15 @@ Remove truly empty or obsolete notes.
 ### promote_maturity
 Upgrade well-linked notes: seedling → budding → evergreen
 
+### find_similar
+Find notes similar to a given topic. Use before splitting to avoid creating duplicates.
+
 ## Guidelines
 1. READ before you WRITE - always use read_note first
 2. Merged content must flow naturally as ONE note
 3. Add links INLINE ("I love [[coffee]] in the morning"), not in "## Related" sections
-4. Be bold about restructuring - that's what tending means
-5. Fix broken links: remove if concept doesn't exist, correct if typo, create if it should exist
+4. Respect existing content - tending is about organizing, not adding
+5. Fix broken links: remove if concept doesn't exist, correct if typo, create minimal stub if it should exist
 
 Today's date: ${today}`;
   }
@@ -461,7 +530,7 @@ Today's date: ${today}`;
   /**
    * Builds the tools object with all intelligent curator tools.
    */
-  private buildTools(today: string, garden: NoteMetadata[]) {
+  private buildTools(tendedAt: string, garden: NoteMetadata[]) {
     return {
       read_note: tool({
         description:
@@ -504,7 +573,7 @@ Today's date: ${today}`;
             const parsed = matter(note.content);
             const updatedContent = matter.stringify(
               this.unescapeContent(newContent),
-              this.normalizeFrontmatter(parsed.data, today),
+              this.normalizeFrontmatter(parsed.data, tendedAt),
             );
 
             await this.obsidianService.writeNote(
@@ -553,7 +622,7 @@ Today's date: ${today}`;
             // Write merged content
             const newContent = matter.stringify(
               this.unescapeContent(mergedContent),
-              this.normalizeFrontmatter(targetParsed.data, today),
+              this.normalizeFrontmatter(targetParsed.data, tendedAt),
             );
 
             await this.obsidianService.writeNote(
@@ -627,7 +696,7 @@ Today's date: ${today}`;
 
               const content = matter.stringify(
                 this.unescapeContent(newNote.content),
-                this.normalizeFrontmatter({}, today),
+                this.normalizeFrontmatter({}, tendedAt),
               );
 
               await this.obsidianService.writeNote(path, content);
@@ -649,7 +718,7 @@ Today's date: ${today}`;
                 const parsed = matter(original.content);
                 const newContent = matter.stringify(
                   this.unescapeContent(updatedOriginal),
-                  this.normalizeFrontmatter(parsed.data, today),
+                  this.normalizeFrontmatter(parsed.data, tendedAt),
                 );
                 await this.obsidianService.writeNote(
                   originalPath.replace(/\.md$/, ''),
@@ -690,7 +759,7 @@ Today's date: ${today}`;
 
             const noteContent = matter.stringify(
               this.unescapeContent(content),
-              this.normalizeFrontmatter({}, today),
+              this.normalizeFrontmatter({}, tendedAt),
             );
 
             await this.obsidianService.writeNote(path, noteContent);
@@ -749,7 +818,7 @@ Today's date: ${today}`;
               parsed.content,
               this.normalizeFrontmatter(
                 { ...parsed.data, maturity: newMaturity },
-                today,
+                tendedAt,
               ),
             );
 
@@ -848,8 +917,11 @@ Today's date: ${today}`;
   /**
    * Marks a note as tended by updating its last-tended frontmatter.
    * Only updates the source file, not any files touched as side effects.
+   *
+   * @param path - Note path to mark as tended
+   * @param tendedAt - Full ISO timestamp when tending occurred
    */
-  private async markAsTended(path: string, today: string): Promise<void> {
+  private async markAsTended(path: string, tendedAt: string): Promise<void> {
     try {
       const note = await this.obsidianService.readNote(path);
       if (!note) {
@@ -859,7 +931,7 @@ Today's date: ${today}`;
       const parsed = matter(note.content);
       const newContent = matter.stringify(
         parsed.content,
-        this.normalizeFrontmatter(parsed.data, today),
+        this.normalizeFrontmatter(parsed.data, tendedAt),
       );
 
       await this.obsidianService.writeNote(

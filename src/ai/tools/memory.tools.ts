@@ -122,7 +122,8 @@ export function createGardenTools(deps: GardenToolsDependencies) {
       }),
       execute: async ({ title, content, folder }) => {
         try {
-          const today = new Date().toISOString().split('T')[0];
+          const now = new Date().toISOString();
+          const plantedDate = now.split('T')[0];
           const sanitizedTitle = sanitizePath(title);
           const path = folder
             ? `${sanitizePath(folder)}/${sanitizedTitle}`
@@ -134,10 +135,11 @@ export function createGardenTools(deps: GardenToolsDependencies) {
             return `Note already exists at "${path}". Use tend to add to it instead.`;
           }
 
-          const finalContent = matter.stringify(`# ${title}\n\n${content}`, {
+          // Don't add H1 header - Obsidian gets title from filename
+          const finalContent = matter.stringify(content, {
             maturity: 'seedling',
-            planted: today,
-            'last-tended': today,
+            planted: plantedDate,
+            'last-tended': now,
           });
 
           await obsidianService.writeNote(path, finalContent);
@@ -169,11 +171,11 @@ export function createGardenTools(deps: GardenToolsDependencies) {
           }
 
           const parsed = matter(note.content);
-          const today = new Date().toISOString().split('T')[0];
+          const tendedAt = new Date().toISOString();
 
           const newContent = matter.stringify(
             `${parsed.content.trim()}\n\n${content}`,
-            { ...parsed.data, 'last-tended': today },
+            { ...parsed.data, 'last-tended': tendedAt },
           );
 
           await obsidianService.writeNote(path, newContent);
@@ -204,7 +206,7 @@ export function createGardenTools(deps: GardenToolsDependencies) {
           }
 
           const parsed = matter(note.content);
-          const today = new Date().toISOString().split('T')[0];
+          const tendedAt = new Date().toISOString();
           const toName = to.replace(/\.md$/, '').split('/').pop();
 
           const linkText = context
@@ -213,7 +215,7 @@ export function createGardenTools(deps: GardenToolsDependencies) {
 
           const newContent = matter.stringify(
             parsed.content.trim() + linkText,
-            { ...parsed.data, 'last-tended': today },
+            { ...parsed.data, 'last-tended': tendedAt },
           );
 
           await obsidianService.writeNote(from, newContent);

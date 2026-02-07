@@ -58,4 +58,11 @@ Obsidian allows same-named files in different folders, but [[Luna]] becomes ambi
 **Always:**
 - Use find_related before planting
 - Add [[wikilinks]] to create connections
-- Think in concepts, not sources`;
+- Think in concepts, not sources
+
+## Note Formatting
+- NO H1 headers (#) - Obsidian provides title from filename
+- Start with content directly, or H2 (##) if sections are needed
+- Be concise - state the fact and move on, no padding
+- Ephemeral moments (events, experiences) need a date reference (e.g., "Feb 2025")
+- Timeless notes (concepts, preferences) don't need dates`;
