@@ -1,0 +1,66 @@
+services:
+  murph:
+    build: .
+    container_name: murph
+    env_file:
+      - .env
+    environment:
+      - REDIS_HOST=redis
+      - QDRANT_URL=http://qdrant:6333
+      - OBSIDIAN_API_URL=http://obsidian:27123
+    depends_on:
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  obsidian:
+    image: lscr.io/linuxserver/obsidian:latest
+    container_name: obsidian
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/New_York
+    volumes:
+      - ./obsidian-config:/config
+    ports:
+      - '3000:3000'
+      - '3001:3001'
+    shm_size: '1gb'
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:27123/']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    volumes:
+      - qdrant-data:/qdrant/storage
+    healthcheck:
+      test: ['CMD-SHELL', 'timeout 5 bash -c "</dev/tcp/localhost/6333" || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  qdrant-data:

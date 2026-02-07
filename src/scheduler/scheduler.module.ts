@@ -1,25 +1,36 @@
+import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
+import { ExpressAdapter } from '@bull-board/express';
+import { BullBoardModule } from '@bull-board/nestjs';
 import { BullModule } from '@nestjs/bullmq';
-import { Module, forwardRef } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { TelegrafModule } from 'nestjs-telegraf';
-import { MessagesModule } from '../messages/messages.module';
 import { RedisModule } from '../redis/redis.module';
-import { BroadcastService } from './broadcast.service';
 import { SchedulerService } from './scheduler.service';
 import { TaskProcessor } from './task.processor';
 
+/**
+ * Handles task scheduling with BullMQ.
+ *
+ * Communication with other modules via EventEmitter:
+ * - Emits SCHEDULED_TASK_TRIGGERED when a task fires
+ * - Emits MESSAGE_BROADCAST for error notifications
+ */
 @Module({
   imports: [
     BullModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
         connection: {
-          host: configService.get<string>('REDIS_HOST', 'localhost'),
-          port: configService.get<number>('REDIS_PORT', 6379),
-          password: configService.get<string>('REDIS_PASSWORD'),
+          host: configService.get<string>('redis.host'),
+          port: configService.get<number>('redis.port'),
+          password: configService.get<string>('redis.password'),
         },
       }),
       inject: [ConfigService],
+    }),
+    BullBoardModule.forRoot({
+      route: '/queues',
+      adapter: ExpressAdapter,
     }),
     BullModule.registerQueue({
       name: 'scheduled-tasks',
@@ -38,12 +49,14 @@ import { TaskProcessor } from './task.processor';
         },
       },
     }),
+    BullBoardModule.forFeature({
+      name: 'scheduled-tasks',
+      adapter: BullMQAdapter,
+    }),
     RedisModule,
-    TelegrafModule, // For @InjectBot()
     ConfigModule,
-    forwardRef(() => MessagesModule),
   ],
-  providers: [SchedulerService, BroadcastService, TaskProcessor],
-  exports: [SchedulerService, BroadcastService],
+  providers: [SchedulerService, TaskProcessor],
+  exports: [SchedulerService],
 })
 export class SchedulerModule {}

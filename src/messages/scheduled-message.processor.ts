@@ -1,81 +1,82 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Job } from 'bullmq';
-import Redis from 'ioredis';
-import { ConversationService } from '../bot/conversation.service';
-import { LlmService } from '../bot/llm.service';
-import { BroadcastService } from '../scheduler/broadcast.service';
-import { ActiveRequestData, QueuedScheduledMessage } from './message.types';
+import { ChatOrchestratorService } from '../ai/chat-orchestrator.service';
+import { AppClsService } from '../common/cls.service';
+import { Events, type MessageBroadcastEvent } from '../common/events';
+import type { ConversationMessage } from '../memory/conversation.schemas';
+import { ConversationService } from '../memory/conversation.service';
+import { RedisService } from '../redis/redis.service';
+import { ActiveRequestData, QueuedScheduledMessage } from './message.schemas';
 
 @Processor('scheduled-messages')
 @Injectable()
 export class ScheduledMessageProcessor extends WorkerHost {
-  private redis: Redis;
+  private readonly logger = new Logger(ScheduledMessageProcessor.name);
 
   constructor(
-    private readonly llmService: LlmService,
+    private readonly chatOrchestrator: ChatOrchestratorService,
     private readonly conversationService: ConversationService,
-    private readonly broadcastService: BroadcastService,
+    private readonly redisService: RedisService,
+    private readonly eventEmitter: EventEmitter2,
+    private readonly clsService: AppClsService,
   ) {
     super();
-    this.redis = new Redis({
-      host: process.env.REDIS_HOST || 'localhost',
-      port: Number.parseInt(process.env.REDIS_PORT || '6379', 10),
-      maxRetriesPerRequest: null,
-    });
   }
 
   async process(job: Job<QueuedScheduledMessage>): Promise<void> {
     const message = job.data;
 
-    // Log what we're processing
-    console.log(`[ScheduledMsg] Processing task ${message.taskId} for user ${message.userId}`);
-    console.log(`[ScheduledMsg] Prompt: "${message.content.substring(0, 100)}..."`);
+    // Set user context in CLS for downstream services
+    this.clsService.setUserId(message.userId);
+
+    this.logger.log(
+      `Processing task ${message.taskId} for user ${message.userId}`,
+    );
+    this.logger.debug(`Prompt: "${message.content.substring(0, 100)}..."`);
 
     try {
       // NO ABORT CHECKING - scheduled messages always run to completion
 
       // 1. Get conversation history
-      const history = await this.conversationService.getConversation(message.userId);
+      const history = await this.conversationService.getConversation(
+        message.userId,
+      );
 
       // 2. Mark SCHEDULED request as active (separate from user)
       await this.setActiveScheduledRequest(message.userId, job.id);
 
-      // 3. Send typing indicator
-      await this.broadcastService.sendTypingIndicator(message.userId);
-
-      // 4. Generate LLM response with tools (NO abort signal)
-      const response = await this.llmService.generateResponse(
+      // 3. Generate LLM response with tools (userId comes from CLS context)
+      const response = await this.chatOrchestrator.generateResponse(
         message.content,
         history,
-        message.userId,
         // NO ABORT SIGNAL
       );
 
-      // Log the response
-      console.log(
-        `[ScheduledMsg] LLM generated ${response.length} chars for task ${message.taskId}`,
+      this.logger.log(
+        `LLM generated ${response.text.length} chars for task ${message.taskId}`,
       );
 
-      // 5. Clear active request
+      // 4. Clear active request
       await this.clearActiveScheduledRequest(message.userId);
 
-      // 6. Store in conversation history
-      await this.conversationService.addMessage(
-        message.userId,
-        'assistant',
-        `[Scheduled: ${message.content}]`,
-      );
-      await this.conversationService.addMessage(message.userId, 'assistant', response);
+      // 5. Store in conversation history (system note + response messages in SDK format)
+      await this.conversationService.addMessages(message.userId, [
+        { role: 'user', content: `[Scheduled: ${message.content}]` },
+        ...(response.messages as ConversationMessage[]),
+      ]);
 
-      // 7. Send to user
-      await this.broadcastService.sendMessageWithRetry(message.userId, response);
+      // 6. Emit broadcast event to send response to user
+      const broadcastEvent: MessageBroadcastEvent = {
+        userId: message.userId,
+        content: response.text,
+      };
+      this.eventEmitter.emit(Events.MESSAGE_BROADCAST, broadcastEvent);
 
-      // Confirm delivery
-      console.log(`[ScheduledMsg] Delivered response to user ${message.userId}`);
+      this.logger.log(`Emitted broadcast for user ${message.userId}`);
     } catch (error) {
-      // Enhanced error logging
-      console.error(`[ScheduledMsg] Failed to process scheduled message:`, {
+      this.logger.error('Failed to process scheduled message:', {
         userId: message.userId,
         taskId: message.taskId,
         error: error.message,
@@ -88,14 +89,19 @@ export class ScheduledMessageProcessor extends WorkerHost {
   /**
    * Set active scheduled request in Redis
    */
-  private async setActiveScheduledRequest(userId: number, jobId: string): Promise<void> {
+  private async setActiveScheduledRequest(
+    userId: number,
+    jobId: string,
+  ): Promise<void> {
     const key = `active_request:${userId}:scheduled`;
     const data: ActiveRequestData = {
       jobId,
       startTime: Date.now(),
       source: 'scheduled',
     };
-    await this.redis.set(key, JSON.stringify(data), 'EX', 300); // 5 minute TTL
+    await this.redisService
+      .getClient()
+      .set(key, JSON.stringify(data), 'EX', 300); // 5 minute TTL
   }
 
   /**
@@ -103,6 +109,6 @@ export class ScheduledMessageProcessor extends WorkerHost {
    */
   private async clearActiveScheduledRequest(userId: number): Promise<void> {
     const key = `active_request:${userId}:scheduled`;
-    await this.redis.del(key);
+    await this.redisService.getClient().del(key);
   }
 }

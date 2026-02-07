@@ -1,24 +1,24 @@
 import 'reflect-metadata';
+import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { Logger as PinoLogger } from 'nestjs-pino';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.createApplicationContext(AppModule);
+  const app = await NestFactory.create(AppModule, { bufferLogs: true });
 
-  // Graceful shutdown handlers
-  process.once('SIGINT', async () => {
-    console.log('\nReceived SIGINT, shutting down gracefully...');
-    await app.close();
-    process.exit(0);
-  });
+  // Use pino logger for all NestJS logs
+  app.useLogger(app.get(PinoLogger));
 
-  process.once('SIGTERM', async () => {
-    console.log('\nReceived SIGTERM, shutting down gracefully...');
-    await app.close();
-    process.exit(0);
-  });
+  const logger = new Logger('Bootstrap');
 
-  console.log('🤖 Telegram bot is running...');
+  // Enable graceful shutdown
+  app.enableShutdownHooks();
+
+  const port = process.env.PORT || 3000;
+  await app.listen(port);
+
+  logger.log('Telegram bot is running...');
 }
 
 bootstrap();

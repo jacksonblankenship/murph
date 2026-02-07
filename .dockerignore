@@ -1,0 +1,14 @@
+node_modules
+dist
+.env
+.env.local
+*.log
+.git
+.gitignore
+.DS_Store
+Thumbs.db
+*.md
+obsidian-config
+qdrant-data
+.claude
+.agents

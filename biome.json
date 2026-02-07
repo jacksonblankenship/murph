@@ -1,5 +1,15 @@
 {
   "$schema": "https://biomejs.dev/schemas/1.4.1/schema.json",
+  "files": {
+    "ignore": [
+      "dist/**",
+      "node_modules/**",
+      ".agents/**",
+      ".claude/**",
+      ".github/**",
+      "obsidian-config/**"
+    ]
+  },
   "organizeImports": {
     "enabled": true
   },
@@ -7,22 +17,53 @@
     "enabled": true,
     "rules": {
       "recommended": true,
+      "suspicious": {
+        "noExplicitAny": "error"
+      },
       "style": {
+        "noNonNullAssertion": "error",
+        "noDefaultExport": "error",
+        "useTemplate": "error",
         "useImportType": "off"
+      },
+      "complexity": {
+        "noUselessConstructor": "off",
+        "noStaticOnlyClass": "off"
       }
     }
   },
+  "overrides": [
+    {
+      "include": ["**/*.test.ts", "**/test/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noNonNullAssertion": "off"
+          },
+          "complexity": {
+            "useLiteralKeys": "off"
+          }
+        }
+      }
+    }
+  ],
   "formatter": {
     "enabled": true,
-    "formatWithErrors": false,
     "indentStyle": "space",
     "indentWidth": 2,
-    "lineWidth": 100
+    "lineWidth": 80,
+    "bracketSpacing": true
   },
   "javascript": {
+    "parser": {
+      "unsafeParameterDecoratorsEnabled": true
+    },
     "formatter": {
+      "arrowParentheses": "asNeeded",
+      "bracketSameLine": true,
       "quoteStyle": "single",
-      "trailingCommas": "all"
+      "trailingCommas": "all",
+      "semicolons": "always"
     }
   }
 }

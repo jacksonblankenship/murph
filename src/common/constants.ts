@@ -1,24 +1,17 @@
 export const BOT_MESSAGES = {
-  START: `👋 Hello! I'm an AI-powered Telegram bot!
+  START: `<b>Welcome!</b>
 
-I'm built with NestJS and powered by Claude AI. I can have conversations with you about anything!
+I'm an AI-powered assistant built with NestJS and Claude.
 
-Just send me a message and I'll respond. Use /help to see available commands.`,
+Send me a message and I'll respond. Use /help to see available commands.`,
 
-  HELLO: 'Hello World! 🌍',
+  HELP: `<b>Available Commands</b>
 
-  HELP: `📚 Available Commands:
+/start - Welcome message
+/clear - Clear conversation history
+/help - Show this help
 
-/start - Get a welcome message
-/hello - Say hello
-/help - Show this help message
-/newsession - Start a new conversation (clears history)
+<i>Or just send me any message!</i>`,
 
-💬 Or just send me any message and I'll respond using AI!
-
-I remember our conversation history and can use tools to help you with tasks!`,
-
-  NEW_SESSION: '✨ Started a new conversation session! Previous messages have been cleared.',
-
-  SESSION_CLEARED: '🔄 Conversation history cleared.',
+  CLEAR: 'Conversation cleared.',
 };

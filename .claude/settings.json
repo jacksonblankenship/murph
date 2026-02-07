@@ -10,15 +10,8 @@
       "mcp__context7__resolve-library-id",
       "mcp__context7__query-docs",
 
-      "mcp__dbhub__execute_sql",
-      "mcp__dbhub__search_objects",
-
-      "mcp__cclsp__find_definition",
-      "mcp__cclsp__find_references",
-      "mcp__cclsp__rename_symbol",
-      "mcp__cclsp__rename_symbol_strict",
-      "mcp__cclsp__get_diagnostics",
-      "mcp__cclsp__restart_server"
+      "mcp__exa__web_search_exa",
+      "mcp__exa__get_code_context_exa"
     ]
   },
   "hooks": {
@@ -28,14 +21,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bun run lint:fix"
+            "command": "bun run lint"
           }
         ]
       }
     ]
-  },
-  "enableAllProjectMcpServers": true,
-  "enabledPlugins": {
-    "ralph-loop@claude-plugins-official": true
   }
 }

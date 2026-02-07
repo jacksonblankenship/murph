@@ -1,49 +1,81 @@
-import { Injectable } from '@nestjs/common';
+import { HttpService } from '@nestjs/axios';
+import { CACHE_MANAGER, Cache } from '@nestjs/cache-manager';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { AxiosError } from 'axios';
+import { firstValueFrom } from 'rxjs';
+import { ExaResponseSchema, ExaSearchResult } from './exa.schemas';
 
-interface ExaSearchResult {
-  title: string;
-  url: string;
-  snippet: string;
-  score?: number;
-}
+const SEARCH_CACHE_TTL = 3600000; // 1 hour in milliseconds
 
 @Injectable()
 export class ExaService {
+  private readonly logger = new Logger(ExaService.name);
   private readonly exaApiUrl = 'https://api.exa.ai/search';
 
-  constructor(private configService: ConfigService) {}
+  constructor(
+    private configService: ConfigService,
+    private httpService: HttpService,
+    @Inject(CACHE_MANAGER) private cache: Cache,
+  ) {}
 
   async search(query: string, numResults = 5): Promise<string> {
+    const cacheKey = `exa:search:${query}:${numResults}`;
+
+    // Check cache first
+    const cached = await this.cache.get<string>(cacheKey);
+    if (cached) {
+      this.logger.debug(`Cache hit for: ${query}`);
+      return cached;
+    }
+
     try {
-      const apiKey = this.configService.get<string>('EXA_API_KEY');
+      const apiKey = this.configService.get<string>('exa.apiKey');
 
       if (!apiKey) {
         return 'Error: EXA_API_KEY not configured. Please add it to .env file.';
       }
 
-      const response = await fetch(this.exaApiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-        },
-        body: JSON.stringify({
-          query,
-          num_results: numResults,
-          use_autoprompt: true,
-        }),
-      });
+      const response = await firstValueFrom(
+        this.httpService.post(
+          this.exaApiUrl,
+          {
+            query,
+            num_results: numResults,
+            use_autoprompt: true,
+          },
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': apiKey,
+            },
+          },
+        ),
+      );
 
-      if (!response.ok) {
-        throw new Error(`Exa API error: ${response.status} ${response.statusText}`);
+      const result = ExaResponseSchema.safeParse(response.data);
+
+      if (!result.success) {
+        this.logger.error('Invalid Exa API response:', result.error.message);
+        return this.formatResults([], query);
       }
 
-      const data = await response.json();
+      const formattedResult = this.formatResults(result.data.results, query);
 
-      return this.formatResults(data.results || [], query);
+      // Cache successful results
+      await this.cache.set(cacheKey, formattedResult, SEARCH_CACHE_TTL);
+      this.logger.debug(`Cached search result for: ${query}`);
+
+      return formattedResult;
     } catch (error) {
-      console.error('Exa search error:', error);
+      this.logger.error('Exa search error:', error);
+
+      if (error instanceof AxiosError) {
+        const status = error.response?.status ?? 'unknown';
+        const statusText = error.response?.statusText ?? error.message;
+        return `Error performing web search: Exa API error: ${status} ${statusText}`;
+      }
+
       return `Error performing web search: ${error.message}`;
     }
   }
