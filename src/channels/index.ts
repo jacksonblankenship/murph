@@ -1,26 +1,22 @@
 // Core types
-export * from './channel.types';
-
-// Registry
-export * from './channel.registry';
-
-// Orchestrator
-export * from './channel-orchestrator.service';
 
 // Builder
 export * from './builders';
 
+// Registry
+export * from './channel.registry';
+export * from './channel.types';
+// Orchestrator
+export * from './channel-orchestrator.service';
+
 // Enrichers
 export * from './enrichers';
-
-// Transformers
-export * from './transformers';
-
 // Outputs
 export * from './outputs';
+// Presets
+export * from './presets';
 
 // Tools
 export * from './tools';
-
-// Presets
-export * from './presets';
+// Transformers
+export * from './transformers';

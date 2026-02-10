@@ -1,4 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { PinoLogger } from 'nestjs-pino';
 import { MemorySearchService } from '../../memory/memory-search.service';
 import type {
   ContextEnricher,
@@ -14,9 +15,12 @@ import type {
  */
 @Injectable()
 export class MemoryEnricher implements ContextEnricher {
-  private readonly logger = new Logger(MemoryEnricher.name);
-
-  constructor(private readonly memorySearchService: MemorySearchService) {}
+  constructor(
+    private readonly logger: PinoLogger,
+    private readonly memorySearchService: MemorySearchService,
+  ) {
+    this.logger.setContext(MemoryEnricher.name);
+  }
 
   async enrich(request: EnrichmentRequest): Promise<EnrichmentResult> {
     try {
@@ -28,14 +32,15 @@ export class MemoryEnricher implements ContextEnricher {
       }
 
       this.logger.debug(
-        `Found relevant memory context for user ${request.userId}`,
+        { userId: request.userId },
+        'Found relevant memory context',
       );
 
       return {
         contextAdditions: `[Relevant memory context from your notes:]\n${memoryContext}`,
       };
     } catch (error) {
-      this.logger.warn('Failed to enrich with memory context:', error.message);
+      this.logger.warn({ err: error }, 'Failed to enrich with memory context');
       return {};
     }
   }

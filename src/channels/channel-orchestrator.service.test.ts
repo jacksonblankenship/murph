@@ -1,8 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import {
-  type ChannelExecuteRequest,
-  ChannelOrchestratorService,
-} from './channel-orchestrator.service';
+import { createMockLogger } from '../test/mocks/pino-logger.mock';
 import { ChannelRegistry } from './channel.registry';
 import type {
   ChannelConfig,
@@ -11,12 +8,20 @@ import type {
   OutputHandler,
   ToolFactory,
 } from './channel.types';
+import {
+  type ChannelExecuteRequest,
+  ChannelOrchestratorService,
+} from './channel-orchestrator.service';
 
 describe('ChannelOrchestratorService', () => {
   let orchestrator: ChannelOrchestratorService;
   let mockRegistry: { get: ReturnType<typeof mock> };
   let mockLlmService: { generate: ReturnType<typeof mock> };
-  let mockConversationService: { addMessages: ReturnType<typeof mock> };
+  let mockConversationService: {
+    addMessages: ReturnType<typeof mock>;
+    extractTurn: ReturnType<typeof mock>;
+  };
+  let mockConversationVectorService: { storeTurn: ReturnType<typeof mock> };
 
   const createMockChannel = (
     overrides: Partial<ChannelConfig> = {},
@@ -51,6 +56,11 @@ describe('ChannelOrchestratorService', () => {
 
     mockConversationService = {
       addMessages: mock(() => Promise.resolve()),
+      extractTurn: mock(() => null),
+    };
+
+    mockConversationVectorService = {
+      storeTurn: mock(() => Promise.resolve()),
     };
 
     mockRegistry = {
@@ -58,9 +68,11 @@ describe('ChannelOrchestratorService', () => {
     };
 
     orchestrator = new ChannelOrchestratorService(
+      createMockLogger(),
       mockRegistry as never,
       mockLlmService as never,
       mockConversationService as never,
+      mockConversationVectorService as never,
     );
   });
 

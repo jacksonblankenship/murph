@@ -10,6 +10,7 @@ services:
       - OBSIDIAN_API_URL=http://obsidian:27123
       # Uncomment for readable logs during local development:
       - LOG_PRETTY=true
+      - LOG_LEVEL=debug
     depends_on:
       redis:
         condition: service_healthy
@@ -37,10 +38,11 @@ services:
       - PGID=1000
       - TZ=America/New_York
     volumes:
-      - ./obsidian-config:/config
+      - obsidian-data:/config
     ports:
       - '3000:3000'
       - '3001:3001'
+      - '27123:27123'
     shm_size: '1gb'
     restart: unless-stopped
     healthcheck:
@@ -66,3 +68,4 @@ services:
 volumes:
   redis-data:
   qdrant-data:
+  obsidian-data:

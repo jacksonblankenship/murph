@@ -1,18 +1,17 @@
 {
-  "$schema": "https://biomejs.dev/schemas/1.4.1/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.3.14/schema.json",
   "files": {
-    "ignore": [
-      "dist/**",
-      "node_modules/**",
-      ".agents/**",
-      ".claude/**",
-      ".github/**",
-      "obsidian-config/**"
+    "includes": [
+      "**",
+      "!**/dist",
+      "!**/node_modules",
+      "!**/.agents",
+      "!**/.claude",
+      "!**/.github",
+      "!**/obsidian-config"
     ]
   },
-  "organizeImports": {
-    "enabled": true
-  },
+  "assist": { "actions": { "source": { "organizeImports": "on" } } },
   "linter": {
     "enabled": true,
     "rules": {
@@ -24,6 +23,7 @@
         "noNonNullAssertion": "error",
         "noDefaultExport": "error",
         "useTemplate": "error",
+        "noMagicNumbers": "error",
         "useImportType": "off"
       },
       "complexity": {
@@ -34,11 +34,12 @@
   },
   "overrides": [
     {
-      "include": ["**/*.test.ts", "**/test/**"],
+      "includes": ["**/*.test.ts", "**/test/**"],
       "linter": {
         "rules": {
           "style": {
-            "noNonNullAssertion": "off"
+            "noNonNullAssertion": "off",
+            "noMagicNumbers": "off"
           },
           "complexity": {
             "useLiteralKeys": "off"

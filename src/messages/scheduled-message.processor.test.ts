@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { Job } from 'bullmq';
 import { SCHEDULED_PROACTIVE_CHANNEL_ID } from '../channels/presets/scheduled.preset';
+import { createMockLogger } from '../test/mocks/pino-logger.mock';
 import { createMockRedis } from '../test/mocks/redis.mock';
 import type { QueuedScheduledMessage } from './message.schemas';
 import { ScheduledMessageProcessor } from './scheduled-message.processor';
@@ -51,6 +52,7 @@ describe('ScheduledMessageProcessor', () => {
     const mockRedisService = { getClient: () => mockRedis };
 
     processor = new ScheduledMessageProcessor(
+      createMockLogger(),
       mockChannelOrchestrator as never,
       mockRedisService as never,
       mockBroadcastService as never,

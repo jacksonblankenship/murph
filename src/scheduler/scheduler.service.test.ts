@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
 import { createMockQueue } from '../test/mocks/bullmq.mock';
 import { injectMurlockService } from '../test/mocks/murlock.mock';
+import { createMockLogger } from '../test/mocks/pino-logger.mock';
 import { createMockRedis } from '../test/mocks/redis.mock';
 import { SchedulerService } from './scheduler.service';
 import { TaskType } from './task.schemas';
@@ -19,6 +20,7 @@ describe('SchedulerService', () => {
     };
 
     service = new SchedulerService(
+      createMockLogger(),
       mockQueue as never,
       mockRedisService as never,
     );

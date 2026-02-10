@@ -1,5 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
+import { PinoLogger } from 'nestjs-pino';
 import { Events, type MessageBroadcastEvent } from '../../common/events';
 import { BroadcastService } from './broadcast.service';
 
@@ -11,15 +12,18 @@ import { BroadcastService } from './broadcast.service';
  */
 @Injectable()
 export class BroadcastHandler {
-  private readonly logger = new Logger(BroadcastHandler.name);
-
-  constructor(private readonly broadcastService: BroadcastService) {}
+  constructor(
+    private readonly logger: PinoLogger,
+    private readonly broadcastService: BroadcastService,
+  ) {
+    this.logger.setContext(BroadcastHandler.name);
+  }
 
   @OnEvent(Events.MESSAGE_BROADCAST)
   async handleBroadcast(event: MessageBroadcastEvent): Promise<void> {
     const { userId, content } = event;
 
-    this.logger.debug(`Broadcasting message to user ${userId}`);
+    this.logger.debug({ userId }, 'Broadcasting message');
 
     const success = await this.broadcastService.sendMessageWithRetry(
       userId,
@@ -27,7 +31,7 @@ export class BroadcastHandler {
     );
 
     if (!success) {
-      this.logger.error(`Failed to broadcast message to user ${userId}`);
+      this.logger.error({ userId }, 'Failed to broadcast message');
     }
   }
 }

@@ -28,6 +28,13 @@ Clarity, correctness, and test coverage matter more than cleverness.
 
 ---
 
+## General Notes
+
+- Prefer Bun APIs to Node APIs, this is a Bun app
+- Breaking changes are awesome. We haven't shipped to production, so if we completely redo something that's totally fine. Better patterns, better practices, better solutions > what we have now. I'm the only user, so if we need to blow something up to make something better, I'm all for it.
+
+---
+
 ## MCP Servers (Use These)
 
 This project provides MCP servers that are **part of the execution environment**, not optional helpers.  

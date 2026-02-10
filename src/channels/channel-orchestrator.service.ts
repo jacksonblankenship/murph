@@ -1,8 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import type { ModelMessage, Tool } from 'ai';
+import { PinoLogger } from 'nestjs-pino';
 import { LlmService } from '../ai/llm.service';
 import type { ConversationMessage } from '../memory/conversation.schemas';
 import { ConversationService } from '../memory/conversation.service';
+import { ConversationVectorService } from '../memory/conversation-vector.service';
 import { ChannelRegistry } from './channel.registry';
 import type {
   ChannelConfig,
@@ -41,13 +43,15 @@ export interface ChannelExecuteRequest {
  */
 @Injectable()
 export class ChannelOrchestratorService {
-  private readonly logger = new Logger(ChannelOrchestratorService.name);
-
   constructor(
+    private readonly logger: PinoLogger,
     private readonly registry: ChannelRegistry,
     private readonly llmService: LlmService,
     private readonly conversationService: ConversationService,
-  ) {}
+    private readonly conversationVectorService: ConversationVectorService,
+  ) {
+    this.logger.setContext(ChannelOrchestratorService.name);
+  }
 
   /**
    * Execute a message through a channel pipeline.
@@ -65,7 +69,8 @@ export class ChannelOrchestratorService {
     const channel = this.registry.get(channelId);
 
     this.logger.debug(
-      `Executing channel "${channelId}" for user ${request.userId}`,
+      { channelId, userId: request.userId },
+      'Executing channel',
     );
 
     // 1. Run transformers pipeline
@@ -98,10 +103,14 @@ export class ChannelOrchestratorService {
       abortSignal: options.abortSignal,
       onStepFinish: ({ toolCalls, finishReason }) => {
         if (toolCalls.length > 0) {
-          this.logger.debug(`Channel "${channelId}" tool calls:`, {
-            finishReason,
-            tools: toolCalls.map(tc => tc.toolName),
-          });
+          this.logger.debug(
+            {
+              channelId,
+              finishReason,
+              tools: toolCalls.map(tc => tc.toolName),
+            },
+            'Channel tool calls',
+          );
         }
       },
     });
@@ -225,20 +234,38 @@ export class ChannelOrchestratorService {
   }
 
   /**
-   * Store conversation in history.
+   * Store conversation in history and index for semantic retrieval.
+   *
+   * 1. Stores full messages in Redis (source of truth)
+   * 2. Extracts and indexes turn to Qdrant (semantic retrieval)
    */
   private async storeConversation(
     userId: number,
     userMessage: string,
     responseMessages: ModelMessage[],
   ): Promise<void> {
+    const messages: ConversationMessage[] = [
+      { role: 'user', content: userMessage },
+      ...(responseMessages as ConversationMessage[]),
+    ];
+
     try {
-      await this.conversationService.addMessages(userId, [
-        { role: 'user', content: userMessage },
-        ...(responseMessages as ConversationMessage[]),
-      ]);
+      // Store full messages in Redis
+      await this.conversationService.addMessages(userId, messages);
+
+      // Extract and index turn to Qdrant for semantic retrieval
+      const turn = this.conversationService.extractTurn(messages);
+      if (turn) {
+        await this.conversationVectorService.storeTurn({
+          userId,
+          userMessage: turn.userMessage,
+          assistantResponse: turn.assistantResponse,
+          toolsUsed: turn.toolsUsed,
+          timestamp: Date.now(),
+        });
+      }
     } catch (error) {
-      this.logger.warn('Failed to store conversation:', error.message);
+      this.logger.warn({ err: error }, 'Failed to store conversation');
     }
   }
 
@@ -261,7 +288,7 @@ export class ChannelOrchestratorService {
       );
       return true;
     } catch (error) {
-      this.logger.error('Failed to send outputs:', error.message);
+      this.logger.error({ err: error }, 'Failed to send outputs');
       return false;
     }
   }

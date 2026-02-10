@@ -5,17 +5,36 @@ import {
   Processor,
   WorkerHost,
 } from '@nestjs/bullmq';
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { generateText, stepCountIs, tool } from 'ai';
 import { Job, Queue } from 'bullmq';
 import matter from 'gray-matter';
+import { PinoLogger } from 'nestjs-pino';
 import { z } from 'zod';
+import { sanitizePath } from '../ai/tools/garden/utils';
+import { formatObsidianDate } from '../common/obsidian-date';
 import { ObsidianService } from '../obsidian/obsidian.service';
+import { PromptService } from '../prompts';
 import { EmbeddingService } from '../vector/embedding.service';
 import { QdrantService } from '../vector/qdrant.service';
 import { IndexSyncProcessor } from './index-sync.processor';
+
+/** Tolerance in milliseconds for file modification detection (1 minute) */
+const MODIFICATION_TOLERANCE_MS = 60_000;
+/** Minimum inbound links for a note to be considered an MOC candidate */
+const MOC_CANDIDATE_MIN_LINKS = 5;
+/** Maximum agent steps during note tending */
+const MAX_TENDING_STEPS = 20;
+/** Default limit for similar notes search */
+const SIMILAR_NOTES_LIMIT = 5;
+/** Minimum similarity score for duplicate detection */
+const SIMILARITY_THRESHOLD = 0.7;
+/** Multiplier for converting decimal scores to percentages */
+const PERCENT_MULTIPLIER = 100;
+/** Maximum depth for link traversal */
+const MAX_TRAVERSE_DEPTH = 3;
 
 interface GardenTendingJob {
   type: 'scheduled-tending';
@@ -24,11 +43,11 @@ interface GardenTendingJob {
 interface NoteMetadata {
   path: string;
   content: string;
-  maturity?: string;
-  planted?: string;
+  growthStage?: string;
   lastTended?: string;
   outboundLinks: string[];
   inboundLinks: string[];
+  isMocCandidate: boolean;
 }
 
 /**
@@ -62,12 +81,12 @@ interface BrokenLink {
 @Processor('garden-tending')
 @Injectable()
 export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
-  private readonly logger = new Logger(GardenTenderProcessor.name);
   private readonly enabled: boolean;
   private model: ReturnType<ReturnType<typeof createAnthropic>>;
   private currentJobId: string | null = null;
 
   constructor(
+    private readonly logger: PinoLogger,
     @InjectQueue('garden-tending')
     private readonly tendingQueue: Queue<GardenTendingJob>,
     private readonly obsidianService: ObsidianService,
@@ -75,8 +94,10 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
     private readonly qdrantService: QdrantService,
     private readonly indexSyncProcessor: IndexSyncProcessor,
     private readonly configService: ConfigService,
+    private readonly promptService: PromptService,
   ) {
     super();
+    this.logger.setContext(GardenTenderProcessor.name);
     this.enabled = this.configService.get<boolean>('gardenTending.enabled');
 
     const anthropicProvider = createAnthropic({
@@ -88,11 +109,11 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
 
   async onModuleInit() {
     if (!this.enabled) {
-      this.logger.log('Garden tending is disabled');
+      this.logger.info({}, 'Garden tending is disabled');
       return;
     }
 
-    this.logger.log('Garden tending scheduled via @Cron (daily at 3am)');
+    this.logger.info({}, 'Garden tending scheduled via @Cron (daily at 3am)');
   }
 
   @Cron(CronExpression.EVERY_DAY_AT_3AM)
@@ -108,7 +129,7 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
     await this.tendingQueue.add('scheduled-tending', {
       type: 'scheduled-tending',
     });
-    this.logger.log('Queued garden tending job');
+    this.logger.info({}, 'Queued garden tending job');
   }
 
   /**
@@ -123,7 +144,10 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
       for (const job of activeJobs) {
         if (job.id === this.currentJobId) {
           await job.discard();
-          this.logger.log(`Discarded running garden tending job ${job.id}`);
+          this.logger.info(
+            { jobId: job.id },
+            'Discarded running garden tending job',
+          );
         }
       }
     }
@@ -133,22 +157,25 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
       type: 'scheduled-tending',
     });
     this.currentJobId = job.id;
-    this.logger.log(`Queued manual garden tending job ${job.id}`);
+    this.logger.info({ jobId: job.id }, 'Queued manual garden tending job');
   }
 
   async process(job: Job<GardenTendingJob>): Promise<void> {
     this.currentJobId = job.id;
-    this.logger.log('Starting garden tending session...');
+    this.logger.info({}, 'Starting garden tending session...');
 
     try {
       const candidates = await this.findCandidatesForTending();
 
       if (candidates.length === 0) {
-        this.logger.log('No files need tending');
+        this.logger.info({}, 'No files need tending');
         return;
       }
 
-      this.logger.log(`Found ${candidates.length} files needing attention`);
+      this.logger.info(
+        { count: candidates.length },
+        'Found files needing attention',
+      );
 
       // Build full garden context for linking decisions
       const garden = await this.buildGardenMetadata();
@@ -159,9 +186,9 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
         await this.tendSingleNote(candidate, garden, brokenLinks);
       }
 
-      this.logger.log('Garden tending session complete');
+      this.logger.info({}, 'Garden tending session complete');
     } catch (error) {
-      this.logger.error('Error during garden tending:', error);
+      this.logger.error({ err: error }, 'Error during garden tending');
       throw error;
     }
   }
@@ -176,7 +203,7 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
 
     for (const note of notes) {
       const parsed = matter(note.content);
-      const lastTendedStr = parsed.data['last-tended'] as string | undefined;
+      const lastTendedStr = parsed.data.last_tended as string | undefined;
       const lastTended = lastTendedStr ? new Date(lastTendedStr) : null;
       const lastModified = await this.obsidianService.getModifiedDate(
         note.path,
@@ -186,9 +213,9 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
         continue;
       }
 
-      // Add 1 minute tolerance to account for the time between capturing
+      // Add tolerance to account for the time between capturing
       // the timestamp and writing the file (which updates mtime)
-      const toleranceMs = 60 * 1000;
+      const toleranceMs = MODIFICATION_TOLERANCE_MS;
       const lastTendedWithTolerance = lastTended
         ? lastTended.getTime() + toleranceMs
         : 0;
@@ -219,11 +246,11 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
       metadata.push({
         path: note.path,
         content: parsed.content,
-        maturity: parsed.data.maturity as string | undefined,
-        planted: parsed.data.planted as string | undefined,
-        lastTended: parsed.data['last-tended'] as string | undefined,
+        growthStage: parsed.data.growth_stage as string | undefined,
+        lastTended: parsed.data.last_tended as string | undefined,
         outboundLinks,
         inboundLinks: [], // Populated in second pass
+        isMocCandidate: false, // Updated in third pass
       });
     }
 
@@ -238,6 +265,11 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
           target.inboundLinks.push(note.path.replace(/\.md$/, ''));
         }
       }
+    }
+
+    // Third pass: identify MOC candidates
+    for (const note of metadata) {
+      note.isMocCandidate = note.inboundLinks.length >= MOC_CANDIDATE_MIN_LINKS;
     }
 
     return metadata;
@@ -291,17 +323,22 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
 
   /**
    * Normalizes frontmatter to ensure consistent keys and ordering.
-   * Order: planted → maturity → last-tended → (any custom keys)
+   * Order: growth_stage → last_tended → summary → aliases → tags → (any custom keys)
    *
    * @param existing - Existing frontmatter data
-   * @param tendedAt - Full ISO timestamp for last-tended (also used as date for planted if missing)
+   * @param tendedAt - Date string (YYYY-MM-DD) for last_tended
    */
   private normalizeFrontmatter(
     existing: Record<string, unknown>,
     tendedAt: string,
   ): Record<string, unknown> {
-    const standardKeys = ['planted', 'maturity', 'last-tended'];
-    const plantedDate = tendedAt.split('T')[0]; // Date portion for planted
+    const standardKeys = [
+      'growth_stage',
+      'last_tended',
+      'summary',
+      'aliases',
+      'tags',
+    ];
 
     // Extract custom keys (anything not in our standard set)
     const customEntries = Object.entries(existing).filter(
@@ -309,9 +346,11 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
     );
 
     return {
-      planted: existing.planted || plantedDate,
-      maturity: existing.maturity || 'seedling',
-      'last-tended': tendedAt, // Always update to current timestamp
+      growth_stage: existing.growth_stage || 'seedling',
+      last_tended: tendedAt, // Always update to current date
+      summary: existing.summary ?? '',
+      aliases: existing.aliases ?? [],
+      tags: existing.tags ?? [],
       ...Object.fromEntries(customEntries),
     };
   }
@@ -325,11 +364,11 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
     garden: NoteMetadata[],
     brokenLinks: BrokenLink[],
   ): Promise<void> {
-    this.logger.log(`Tending: ${candidate.path}`);
+    this.logger.info({ path: candidate.path }, 'Tending note');
 
-    // Full ISO timestamp for last-tended comparisons
-    const tendedAt = new Date().toISOString();
-    const todayDate = tendedAt.split('T')[0];
+    // Date-only format for last_tended
+    const tendedAt = formatObsidianDate();
+    const todayDate = tendedAt;
 
     // Find broken links in this specific note
     const noteBrokenLinks = brokenLinks.filter(
@@ -346,7 +385,7 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
     await generateText({
       model: this.model,
       maxOutputTokens: 8192,
-      system: this.buildCuratorPrompt(todayDate),
+      system: this.promptService.render('garden-curator', { today: todayDate }),
       messages: [
         {
           role: 'user',
@@ -354,11 +393,22 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
         },
       ],
       tools: this.buildTools(tendedAt, garden),
-      stopWhen: stepCountIs(20),
+      stopWhen: stepCountIs(MAX_TENDING_STEPS),
     });
 
     // After tending, update ONLY this note's last-tended with full timestamp
     await this.markAsTended(candidate.path, tendedAt);
+  }
+
+  /**
+   * Checks if a note is an orphan (has no inbound or outbound links).
+   */
+  private isOrphan(noteMetadata: NoteMetadata | undefined): boolean {
+    if (!noteMetadata) return true;
+    return (
+      noteMetadata.inboundLinks.length === 0 &&
+      noteMetadata.outboundLinks.length === 0
+    );
   }
 
   /**
@@ -377,23 +427,29 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
     let similarNotesSection = '';
     try {
       const embedding = await this.embeddingService.embed(parsed.content);
-      const similarNotes = await this.qdrantService.searchSimilar(embedding, 5);
+      const similarNotes = await this.qdrantService.searchSimilar(
+        embedding,
+        SIMILAR_NOTES_LIMIT,
+      );
       const filtered = similarNotes.filter(
-        s => s.path !== candidate.path && s.score > 0.7,
+        s => s.path !== candidate.path && s.score > SIMILARITY_THRESHOLD,
       );
       if (filtered.length > 0) {
         similarNotesSection = `
 ## Similar Notes (check for duplicates)
-${filtered.map(s => `- ${s.path} (${(s.score * 100).toFixed(0)}% similar)`).join('\n')}
+${filtered.map(s => `- ${s.path} (${(s.score * PERCENT_MULTIPLIER).toFixed(0)}% similar)`).join('\n')}
 `;
       }
     } catch {
       // If embedding fails, continue without similar notes
     }
 
+    // Check orphan status
+    const isOrphan = this.isOrphan(noteMetadata);
+
     // Get list of all existing notes for linking context
     const existingNotes = garden
-      .map(n => `- ${n.path} [${n.maturity || 'seedling'}]`)
+      .map(n => `- ${n.path} [${n.growthStage || 'seedling'}]`)
       .join('\n');
 
     let context = `# Note to Tend: ${candidate.path}
@@ -404,11 +460,26 @@ ${parsed.content}
 \`\`\`
 
 ## Metadata
-- Maturity: ${noteMetadata?.maturity || 'seedling'}
+- Growth stage: ${noteMetadata?.growthStage || 'seedling'}
 - Inbound links: ${noteMetadata?.inboundLinks.length || 0}
 - Outbound links: ${noteMetadata?.outboundLinks.length || 0}
 - Last tended: ${candidate.lastTended?.toISOString().split('T')[0] || 'never'}
 `;
+
+    // Check if this is an MOC candidate
+    const isMocCandidate = noteMetadata?.isMocCandidate || false;
+
+    // Add warnings for orphans, old seeds, and MOC candidates
+    if (isOrphan || isMocCandidate) {
+      context += '\n## Attention Required\n';
+      if (isOrphan) {
+        context +=
+          '- **ORPHAN**: This note has no connections. Find related notes to link to/from.\n';
+      }
+      if (isMocCandidate) {
+        context += `- **MOC CANDIDATE**: This note has ${noteMetadata?.inboundLinks.length || 0} inbound links. Consider creating a Map of Content to organize related notes.\n`;
+      }
+    }
 
     if (similarNotesSection) {
       context += similarNotesSection;
@@ -431,100 +502,10 @@ ${existingNotes}
 3. Fix or remove broken links
 4. If this note covers multiple concepts, check find_similar before splitting
 5. Promote maturity if well-linked and thorough
+6. If orphaned, find notes that should link here or concepts to link to
 `;
 
     return context;
-  }
-
-  /**
-   * Builds the curator prompt with preservation and brevity guardrails.
-   */
-  private buildCuratorPrompt(today: string): string {
-    return `You are a digital garden curator performing intelligent maintenance.
-
-## Core Principles
-- **ATOMIC**: One concept per note. Split notes covering multiple topics.
-- **CONCEPT-ORIENTED**: Organize by idea, not by source/person.
-- **DENSELY LINKED**: Add [[wikilinks]] INLINE where concepts are mentioned, not in separate "Related" sections.
-
-## Preservation Rules (CRITICAL)
-- ONLY USE content that exists in the notes - do not add context, examples, or explanations
-- NEVER invent relationships between concepts - only link when content explicitly supports it
-- When merging, combine existing text with minimal transitions - do not elaborate
-- When splitting, extract exact content - do not expand on ideas that were briefly mentioned
-- When creating notes for broken links, create minimal stubs - not full articles
-- Preserve the author's voice and specificity - do not generalize or smooth over details
-
-## Brevity Rules
-- Notes should be as short as they need to be - no padding or filler
-- If a note repeats the same point multiple ways, condense to the clearest version
-- Remove redundant sentences that add no new information
-- One clear statement is better than three vague ones
-- State the fact and move on - don't belabor the point
-
-## Formatting Rules
-- NEVER add H1 headers (#) - Obsidian notes get their title from the filename
-- If a note starts with an H1 that matches or resembles the filename, remove it
-- Start note content directly or with H2 (##) if sections are needed
-
-## Date Context Rules
-- Ephemeral moments (events, experiences, things that happened) should include a date
-- Can be shorthand like "Feb 2025" or "early 2024" - just enough to place it in time
-- General/timeless notes (concepts, preferences, facts) don't need dates
-- If content describes something that happened but has no temporal context, add one
-
-## Deduplication Workflow
-Before making changes, check the "Similar Notes" section below. If any note is >80% similar:
-1. Read both notes with read_note
-2. If they cover the same concept, use merge_notes to consolidate
-3. If they cover related but distinct concepts, ensure they link to each other
-
-When splitting a note:
-1. First use find_similar to check if the extracted concept already exists
-2. If it does, link to the existing note instead of creating a duplicate
-
-## Your Tools
-
-### read_note
-ALWAYS read notes before modifying them. Never guess at content.
-
-### rewrite_note
-Reorganize and condense existing content - remove redundancy, keep it tight.
-- Add inline [[wikilinks]] where other notes are referenced
-- Restructure for clarity
-- Fix broken links by removing or correcting them
-
-### merge_notes
-Combine their explicit content with minimal transitions. Remove redundancy.
-- The result must read naturally - NO "merged from" markers or separators
-- You provide the merged content directly
-
-### split_note
-When a note covers multiple distinct concepts, split it:
-- Create separate atomic notes for each concept
-- Add links between the new notes
-- Delete or update the original
-
-### create_note
-Create a minimal stub note ONLY when explicitly referenced by a broken link.
-
-### delete_note
-Remove truly empty or obsolete notes.
-
-### promote_maturity
-Upgrade well-linked notes: seedling → budding → evergreen
-
-### find_similar
-Find notes similar to a given topic. Use before splitting to avoid creating duplicates.
-
-## Guidelines
-1. READ before you WRITE - always use read_note first
-2. Merged content must flow naturally as ONE note
-3. Add links INLINE ("I love [[coffee]] in the morning"), not in "## Related" sections
-4. Respect existing content - tending is about organizing, not adding
-5. Fix broken links: remove if concept doesn't exist, correct if typo, create minimal stub if it should exist
-
-Today's date: ${today}`;
   }
 
   /**
@@ -582,7 +563,7 @@ Today's date: ${today}`;
             );
             await this.indexSyncProcessor.queueSingleNote(path, updatedContent);
 
-            this.logger.log(`Rewrote ${path}: ${reason}`);
+            this.logger.info({ path, reason }, 'Rewrote note');
             return `Rewrote ${path}`;
           } catch (error) {
             return `Error rewriting note: ${error.message}`;
@@ -641,8 +622,9 @@ Today's date: ${today}`;
             // Update any notes linking to source -> target
             await this.updateLinksToDeletedNote(sourcePath, targetPath, garden);
 
-            this.logger.log(
-              `Merged ${sourcePath} into ${targetPath}: ${reason}`,
+            this.logger.info(
+              { sourcePath, targetPath, reason },
+              'Merged notes',
             );
             return `Merged ${sourcePath} into ${targetPath}`;
           } catch (error) {
@@ -731,8 +713,9 @@ Today's date: ${today}`;
               }
             }
 
-            this.logger.log(
-              `Split ${originalPath} into ${createdPaths.length} notes: ${reason}`,
+            this.logger.info(
+              { originalPath, count: createdPaths.length, reason },
+              'Split note',
             );
             return `Split ${originalPath} into: ${createdPaths.join(', ')}`;
           } catch (error) {
@@ -768,7 +751,7 @@ Today's date: ${today}`;
               noteContent,
             );
 
-            this.logger.log(`Created ${path}: ${reason}`);
+            this.logger.info({ path, reason }, 'Created note');
             return `Created ${path}`;
           } catch (error) {
             return `Error creating note: ${error.message}`;
@@ -788,7 +771,7 @@ Today's date: ${today}`;
             await this.obsidianService.deleteNote(path);
             await this.qdrantService.deleteNote(path);
 
-            this.logger.log(`Deleted ${path}: ${reason}`);
+            this.logger.info({ path, reason }, 'Deleted note');
             return `Deleted ${path}`;
           } catch (error) {
             return `Error deleting note: ${error.message}`;
@@ -798,12 +781,12 @@ Today's date: ${today}`;
 
       promote_maturity: tool({
         description:
-          'Promote a note to a higher maturity level (seedling -> budding -> evergreen)',
+          'Promote a note to a higher growth stage (seedling -> budding -> evergreen)',
         inputSchema: z.object({
           path: z.string().describe('Note path'),
           newMaturity: z
             .enum(['budding', 'evergreen'])
-            .describe('New maturity level'),
+            .describe('New growth stage'),
           reason: z.string().describe('Brief reason for promotion'),
         }),
         execute: async ({ path, newMaturity, reason }) => {
@@ -817,7 +800,7 @@ Today's date: ${today}`;
             const newContent = matter.stringify(
               parsed.content,
               this.normalizeFrontmatter(
-                { ...parsed.data, maturity: newMaturity },
+                { ...parsed.data, growth_stage: newMaturity },
                 tendedAt,
               ),
             );
@@ -828,7 +811,10 @@ Today's date: ${today}`;
             );
             await this.indexSyncProcessor.queueSingleNote(path, newContent);
 
-            this.logger.log(`Promoted ${path} to ${newMaturity}: ${reason}`);
+            this.logger.info(
+              { path, newMaturity, reason },
+              'Promoted note growth stage',
+            );
             return `Promoted ${path} to ${newMaturity}`;
           } catch (error) {
             return `Error promoting note: ${error.message}`;
@@ -841,9 +827,13 @@ Today's date: ${today}`;
           'Find notes similar to a given topic (for identifying duplicates)',
         inputSchema: z.object({
           query: z.string().describe('Topic to search for'),
-          limit: z.number().optional().default(5).describe('Max results'),
+          limit: z
+            .number()
+            .optional()
+            .default(SIMILAR_NOTES_LIMIT)
+            .describe('Max results'),
         }),
-        execute: async ({ query, limit = 5 }) => {
+        execute: async ({ query, limit = SIMILAR_NOTES_LIMIT }) => {
           try {
             const embedding = await this.embeddingService.embed(query);
             const results = await this.qdrantService.searchSimilar(
@@ -857,11 +847,294 @@ Today's date: ${today}`;
 
             return results
               .map(
-                r => `- ${r.path} (similarity: ${(r.score * 100).toFixed(1)}%)`,
+                r =>
+                  `- ${r.path} (similarity: ${(r.score * PERCENT_MULTIPLIER).toFixed(1)}%)`,
               )
               .join('\n');
           } catch (error) {
             return `Error searching: ${error.message}`;
+          }
+        },
+      }),
+
+      supersede: tool({
+        description:
+          'Mark a note as superseded when thinking has fundamentally evolved. Creates a new note and marks the old one as historical context. Preserves the evolution of thought.',
+        inputSchema: z.object({
+          oldPath: z.string().describe('Path of the note being superseded'),
+          newTitle: z
+            .string()
+            .describe('Title for the new note with evolved thinking'),
+          newContent: z
+            .string()
+            .describe(
+              'The evolved understanding. Use [[wikilinks]] to connect to related concepts.',
+            ),
+          reason: z
+            .string()
+            .optional()
+            .describe('Brief explanation of why thinking evolved'),
+          folder: z
+            .string()
+            .optional()
+            .describe('Folder for the new note (defaults to same as old)'),
+        }),
+        execute: async ({ oldPath, newTitle, newContent, reason, folder }) => {
+          try {
+            const oldNote = await this.obsidianService.readNote(oldPath);
+            if (!oldNote) {
+              return `Note not found: ${oldPath}`;
+            }
+
+            const today = formatObsidianDate();
+            const parsed = matter(oldNote.content);
+
+            const sanitizedTitle = sanitizePath(newTitle);
+            const oldFolder = oldPath.includes('/')
+              ? oldPath.split('/').slice(0, -1).join('/')
+              : undefined;
+            const targetFolder = folder ? sanitizePath(folder) : oldFolder;
+            const newPath = targetFolder
+              ? `${targetFolder}/${sanitizedTitle}`
+              : sanitizedTitle;
+
+            const existingNew = await this.obsidianService.readNote(newPath);
+            if (existingNew) {
+              return `Note already exists at "${newPath}". Choose a different title.`;
+            }
+
+            // Create the new note with supersedes info in body
+            const oldName = oldPath.replace(/\.md$/, '').split('/').pop();
+            const supersedesBody = `_Supersedes [[${oldName}]]_\n\n${this.unescapeContent(newContent)}`;
+            const newNoteContent = matter.stringify(supersedesBody, {
+              growth_stage: 'seedling',
+              last_tended: today,
+              summary: '',
+              aliases: [],
+              tags: [],
+            });
+
+            await this.obsidianService.writeNote(newPath, newNoteContent);
+            await this.indexSyncProcessor.queueSingleNote(
+              newPath,
+              newNoteContent,
+            );
+
+            // Mark the old note as superseded (body only, no frontmatter pollution)
+            const supersessionNotice = reason
+              ? `> **Superseded:** This note has been superseded by [[${sanitizedTitle}]]. ${reason}\n\n`
+              : `> **Superseded:** This note has been superseded by [[${sanitizedTitle}]].\n\n`;
+
+            const updatedOldContent = matter.stringify(
+              supersessionNotice + parsed.content.trim(),
+              this.normalizeFrontmatter(parsed.data, tendedAt),
+            );
+
+            await this.obsidianService.writeNote(oldPath, updatedOldContent);
+            await this.indexSyncProcessor.queueSingleNote(
+              oldPath,
+              updatedOldContent,
+            );
+
+            this.logger.info({ oldPath, newPath, reason }, 'Superseded note');
+            return `Superseded "${oldPath}" with "${newPath}"`;
+          } catch (error) {
+            return `Error superseding note: ${error.message}`;
+          }
+        },
+      }),
+
+      traverse: tool({
+        description:
+          'Explore the garden by following links from a note. Discovers related concepts through the knowledge graph.',
+        inputSchema: z.object({
+          from: z.string().describe('Starting note path'),
+          direction: z
+            .enum(['outbound', 'inbound', 'both'])
+            .optional()
+            .default('both')
+            .describe('Direction to traverse'),
+          depth: z
+            .number()
+            .optional()
+            .default(1)
+            .describe('Link hops to follow (1-3)'),
+        }),
+        execute: async ({ from, direction = 'both', depth = 1 }) => {
+          try {
+            const clampedDepth = Math.min(
+              Math.max(depth, 1),
+              MAX_TRAVERSE_DEPTH,
+            );
+            const normalizedFrom = from.replace(/\.md$/, '');
+
+            // Build link maps from garden metadata
+            const outboundMap = new Map<string, string[]>();
+            const inboundMap = new Map<string, string[]>();
+
+            for (const note of garden) {
+              const path = note.path.replace(/\.md$/, '');
+              outboundMap.set(path, note.outboundLinks);
+              for (const link of note.outboundLinks) {
+                if (!inboundMap.has(link)) {
+                  inboundMap.set(link, []);
+                }
+                inboundMap.get(link)?.push(path);
+              }
+            }
+
+            // BFS traversal
+            const visited = new Set<string>();
+            const result: {
+              path: string;
+              depth: number;
+              direction: string;
+            }[] = [];
+
+            interface QueueItem {
+              path: string;
+              currentDepth: number;
+              dir: 'outbound' | 'inbound';
+            }
+            const queue: QueueItem[] = [];
+
+            if (direction === 'outbound' || direction === 'both') {
+              for (const target of outboundMap.get(normalizedFrom) || []) {
+                queue.push({
+                  path: target,
+                  currentDepth: 1,
+                  dir: 'outbound',
+                });
+              }
+            }
+            if (direction === 'inbound' || direction === 'both') {
+              for (const source of inboundMap.get(normalizedFrom) || []) {
+                queue.push({
+                  path: source,
+                  currentDepth: 1,
+                  dir: 'inbound',
+                });
+              }
+            }
+
+            while (queue.length > 0) {
+              const item = queue.shift();
+              if (!item) break;
+              if (visited.has(item.path)) continue;
+              visited.add(item.path);
+
+              result.push({
+                path: item.path,
+                depth: item.currentDepth,
+                direction: item.dir,
+              });
+
+              if (item.currentDepth < clampedDepth) {
+                if (item.dir === 'outbound') {
+                  for (const target of outboundMap.get(item.path) || []) {
+                    if (!visited.has(target)) {
+                      queue.push({
+                        path: target,
+                        currentDepth: item.currentDepth + 1,
+                        dir: 'outbound',
+                      });
+                    }
+                  }
+                } else {
+                  for (const source of inboundMap.get(item.path) || []) {
+                    if (!visited.has(source)) {
+                      queue.push({
+                        path: source,
+                        currentDepth: item.currentDepth + 1,
+                        dir: 'inbound',
+                      });
+                    }
+                  }
+                }
+              }
+            }
+
+            if (result.length === 0) {
+              return `No ${direction === 'both' ? '' : `${direction} `}connections found from "${normalizedFrom}".`;
+            }
+
+            let response = `**Traversal from "${normalizedFrom}"** (depth: ${clampedDepth}, direction: ${direction})\n\n`;
+
+            for (let d = 1; d <= clampedDepth; d++) {
+              const atDepth = result.filter(r => r.depth === d);
+              if (atDepth.length === 0) continue;
+
+              response += `**${d} hop${d > 1 ? 's' : ''} away:**\n`;
+              for (const item of atDepth) {
+                const arrow = item.direction === 'outbound' ? '->' : '<-';
+                response += `  ${arrow} ${item.path}\n`;
+              }
+              response += '\n';
+            }
+
+            return response.trim();
+          } catch (error) {
+            return `Error traversing: ${error.message}`;
+          }
+        },
+      }),
+
+      backlinks: tool({
+        description:
+          "Find notes that link TO a given note, with context about why. Useful for understanding a concept's place in the garden.",
+        inputSchema: z.object({
+          path: z.string().describe('Note to find backlinks for'),
+        }),
+        execute: async ({ path }) => {
+          try {
+            const normalizedPath = path.replace(/\.md$/, '');
+            const pathName = normalizedPath.split('/').pop();
+
+            const notes = await this.obsidianService.getAllNotesWithContent();
+            const wikilinkRegex = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
+            const backlinks: { path: string; context: string }[] = [];
+
+            for (const note of notes) {
+              if (note.path.replace(/\.md$/, '') === normalizedPath) {
+                continue;
+              }
+
+              const parsed = matter(note.content);
+              const lines = parsed.content.split('\n');
+
+              for (const line of lines) {
+                let match = wikilinkRegex.exec(line);
+                while (match !== null) {
+                  const linkTarget = match[1];
+                  if (
+                    linkTarget === normalizedPath ||
+                    linkTarget === pathName ||
+                    linkTarget.endsWith(`/${pathName}`)
+                  ) {
+                    backlinks.push({
+                      path: note.path.replace(/\.md$/, ''),
+                      context: line.trim(),
+                    });
+                    break;
+                  }
+                  match = wikilinkRegex.exec(line);
+                }
+                wikilinkRegex.lastIndex = 0;
+              }
+            }
+
+            if (backlinks.length === 0) {
+              return `No notes link to "${normalizedPath}".`;
+            }
+
+            let response = `**Backlinks to "${normalizedPath}" (${backlinks.length}):**\n\n`;
+            for (const bl of backlinks) {
+              response += `**${bl.path}**\n> ${bl.context}\n\n`;
+            }
+
+            return response.trim();
+          } catch (error) {
+            return `Error finding backlinks: ${error.message}`;
           }
         },
       }),
@@ -901,13 +1174,15 @@ Today's date: ${today}`;
               note.path.replace(/\.md$/, ''),
               updatedContent,
             );
-            this.logger.log(
-              `Updated links in ${note.path}: ${deletedName} -> ${newName}`,
+            this.logger.info(
+              { notePath: note.path, from: deletedName, to: newName },
+              'Updated links in note',
             );
           }
         } catch (error) {
           this.logger.warn(
-            `Failed to update links in ${note.path}: ${error.message}`,
+            { err: error, notePath: note.path },
+            'Failed to update links in note',
           );
         }
       }
@@ -940,17 +1215,20 @@ Today's date: ${today}`;
       );
       // Don't re-index - we only changed metadata
     } catch (error) {
-      this.logger.warn(`Failed to mark ${path} as tended: ${error.message}`);
+      this.logger.warn({ err: error, path }, 'Failed to mark note as tended');
     }
   }
 
   @OnWorkerEvent('completed')
   onCompleted(job: Job) {
-    this.logger.debug(`Garden tending job ${job.id} completed`);
+    this.logger.debug({ jobId: job.id }, 'Garden tending job completed');
   }
 
   @OnWorkerEvent('failed')
   onFailed(job: Job, error: Error) {
-    this.logger.error(`Garden tending job ${job.id} failed:`, error.message);
+    this.logger.error(
+      { err: error, jobId: job.id },
+      'Garden tending job failed',
+    );
   }
 }

@@ -1,11 +1,12 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
+import { PromptService } from '../../prompts';
 import { ChannelBuilder } from '../builders/channel.builder';
 import { ChannelRegistry } from '../channel.registry';
 import type { ChannelConfig } from '../channel.types';
+import { TimeEnricher } from '../enrichers/time.enricher';
 import { NullOutput } from '../outputs/null.output';
-import { MemoryToolFactory } from '../tools/memory.factory';
+import { GardenToolFactory } from '../tools/garden.factory';
 import { TimeToolFactory } from '../tools/time.factory';
-import { GARDEN_TENDER_PROMPT } from './prompts';
 
 /**
  * Channel ID for garden tender background tasks.
@@ -24,8 +25,10 @@ export const GARDEN_TENDER_CHANNEL_ID = 'garden-tender';
 export class GardenTenderPreset implements OnModuleInit {
   constructor(
     private readonly registry: ChannelRegistry,
+    private readonly promptService: PromptService,
+    private readonly timeEnricher: TimeEnricher,
     private readonly timeToolFactory: TimeToolFactory,
-    private readonly memoryToolFactory: MemoryToolFactory,
+    private readonly gardenToolFactory: GardenToolFactory,
     private readonly nullOutput: NullOutput,
   ) {}
 
@@ -35,9 +38,10 @@ export class GardenTenderPreset implements OnModuleInit {
 
   build(): ChannelConfig {
     return new ChannelBuilder(GARDEN_TENDER_CHANNEL_ID)
-      .withSystemPrompt(GARDEN_TENDER_PROMPT)
+      .withSystemPrompt(this.promptService.get('garden-curator'))
+      .addEnricher(this.timeEnricher)
       .addTools(this.timeToolFactory)
-      .addTools(this.memoryToolFactory)
+      .addTools(this.gardenToolFactory)
       .addOutput(this.nullOutput)
       .build();
   }

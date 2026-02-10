@@ -1,15 +1,15 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
+import { PromptService } from '../../prompts';
 import { ChannelBuilder } from '../builders/channel.builder';
 import { ChannelRegistry } from '../channel.registry';
 import type { ChannelConfig } from '../channel.types';
 import { HistoryEnricher } from '../enrichers/history.enricher';
-import { MemoryEnricher } from '../enrichers/memory.enricher';
+import { TimeEnricher } from '../enrichers/time.enricher';
 import { TelegramOutput } from '../outputs/telegram.output';
-import { MemoryToolFactory } from '../tools/memory.factory';
+import { GardenToolFactory } from '../tools/garden.factory';
 import { TimeToolFactory } from '../tools/time.factory';
 import { WebSearchToolFactory } from '../tools/web-search.factory';
 import { ProactiveTransformer } from '../transformers/proactive.transformer';
-import { SCHEDULED_PROACTIVE_PROMPT } from './prompts';
 
 /**
  * Channel ID for scheduled proactive tasks.
@@ -21,8 +21,7 @@ export const SCHEDULED_PROACTIVE_CHANNEL_ID = 'scheduled-proactive';
  *
  * Features:
  * - Proactive transformer (reframes message for outreach)
- * - Memory context enrichment
- * - Conversation history
+ * - Hybrid context enrichment (conversation history + long-term memory)
  * - Tools: time, memory, web search (no scheduling - tasks can't schedule more tasks)
  * - Telegram output
  */
@@ -30,11 +29,12 @@ export const SCHEDULED_PROACTIVE_CHANNEL_ID = 'scheduled-proactive';
 export class ScheduledPreset implements OnModuleInit {
   constructor(
     private readonly registry: ChannelRegistry,
+    private readonly promptService: PromptService,
     private readonly proactiveTransformer: ProactiveTransformer,
-    private readonly memoryEnricher: MemoryEnricher,
     private readonly historyEnricher: HistoryEnricher,
+    private readonly timeEnricher: TimeEnricher,
     private readonly timeToolFactory: TimeToolFactory,
-    private readonly memoryToolFactory: MemoryToolFactory,
+    private readonly gardenToolFactory: GardenToolFactory,
     private readonly webSearchToolFactory: WebSearchToolFactory,
     private readonly telegramOutput: TelegramOutput,
   ) {}
@@ -45,12 +45,12 @@ export class ScheduledPreset implements OnModuleInit {
 
   build(): ChannelConfig {
     return new ChannelBuilder(SCHEDULED_PROACTIVE_CHANNEL_ID)
-      .withSystemPrompt(SCHEDULED_PROACTIVE_PROMPT)
+      .withSystemPrompt(this.promptService.get('scheduled-proactive'))
       .addTransformer(this.proactiveTransformer)
-      .addEnricher(this.memoryEnricher)
       .addEnricher(this.historyEnricher)
+      .addEnricher(this.timeEnricher)
       .addTools(this.timeToolFactory)
-      .addTools(this.memoryToolFactory)
+      .addTools(this.gardenToolFactory)
       .addTools(this.webSearchToolFactory)
       .addOutput(this.telegramOutput)
       .build();

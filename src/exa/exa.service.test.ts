@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import { AxiosError, type AxiosResponse } from 'axios';
 import { of, throwError } from 'rxjs';
+import { createMockLogger } from '../test/mocks/pino-logger.mock';
 import { ExaService } from './exa.service';
 
 describe('ExaService', () => {
@@ -31,6 +32,7 @@ describe('ExaService', () => {
     };
 
     service = new ExaService(
+      createMockLogger(),
       mockConfigService as never,
       mockHttpService as never,
       mockCache as never,

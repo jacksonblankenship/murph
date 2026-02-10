@@ -1,5 +1,6 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
+import { PinoLogger } from 'nestjs-pino';
 import type { ChannelConfig } from './channel.types';
 
 /**
@@ -25,16 +26,21 @@ export interface ChannelPreset {
  */
 @Injectable()
 export class ChannelRegistry implements OnModuleInit {
-  private readonly logger = new Logger(ChannelRegistry.name);
   private readonly channels = new Map<string, ChannelConfig>();
 
-  constructor(private readonly moduleRef: ModuleRef) {}
+  constructor(
+    private readonly logger: PinoLogger,
+    private readonly moduleRef: ModuleRef,
+  ) {
+    this.logger.setContext(ChannelRegistry.name);
+  }
 
   async onModuleInit(): Promise<void> {
     // Presets are registered manually via register() method
     // This allows for explicit control over registration order
-    this.logger.log(
-      `Channel registry initialized with ${this.channels.size} channels`,
+    this.logger.info(
+      { count: this.channels.size },
+      'Channel registry initialized',
     );
   }
 
@@ -48,7 +54,7 @@ export class ChannelRegistry implements OnModuleInit {
       throw new Error(`Channel "${config.id}" is already registered`);
     }
     this.channels.set(config.id, config);
-    this.logger.debug(`Registered channel: ${config.id}`);
+    this.logger.debug({ channelId: config.id }, 'Registered channel');
   }
 
   /**

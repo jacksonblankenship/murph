@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { Job } from 'bullmq';
 import { Events } from '../common/events';
+import { createMockLogger } from '../test/mocks/pino-logger.mock';
 import { createMockRedis } from '../test/mocks/redis.mock';
 import { TaskProcessor } from './task.processor';
 import { type ScheduledTask, TaskType } from './task.schemas';
@@ -28,6 +29,7 @@ describe('TaskProcessor', () => {
     };
 
     processor = new TaskProcessor(
+      createMockLogger(),
       mockRedisService as never,
       mockEventEmitter as never,
     );

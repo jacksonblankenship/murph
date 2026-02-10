@@ -1,4 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { PinoLogger } from 'nestjs-pino';
 import type { OutputContext, OutputHandler } from '../channel.types';
 
 /**
@@ -9,7 +10,9 @@ import type { OutputContext, OutputHandler } from '../channel.types';
  */
 @Injectable()
 export class NullOutput implements OutputHandler {
-  private readonly logger = new Logger(NullOutput.name);
+  constructor(private readonly logger: PinoLogger) {
+    this.logger.setContext(NullOutput.name);
+  }
 
   async send(
     userId: number,
@@ -17,7 +20,8 @@ export class NullOutput implements OutputHandler {
     context: OutputContext,
   ): Promise<void> {
     this.logger.debug(
-      `Discarding output for user ${userId} from channel ${context.channelId} (${content.length} chars)`,
+      { userId, channelId: context.channelId, contentLength: content.length },
+      'Discarding output',
     );
     // Intentionally do nothing
   }

@@ -1,7 +1,8 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { type ModelMessage, type Tool, generateText, stepCountIs } from 'ai';
+import { generateText, type ModelMessage, stepCountIs, type Tool } from 'ai';
+import { PinoLogger } from 'nestjs-pino';
 
 export interface LlmGenerateOptions {
   system: string;
@@ -26,10 +27,13 @@ export interface LlmResponse {
 
 @Injectable()
 export class LlmService {
-  private readonly logger = new Logger(LlmService.name);
   private readonly model: ReturnType<ReturnType<typeof createAnthropic>>;
 
-  constructor(private configService: ConfigService) {
+  constructor(
+    private readonly logger: PinoLogger,
+    private configService: ConfigService,
+  ) {
+    this.logger.setContext(LlmService.name);
     const anthropicProvider = createAnthropic({
       apiKey: this.configService.get<string>('anthropic.apiKey'),
     });
@@ -59,11 +63,14 @@ export class LlmService {
         stopWhen: stepCountIs(maxSteps),
       });
 
-      this.logger.debug('Generation complete', {
-        finishReason: result.finishReason,
-        stepCount: result.steps.length,
-        toolCallCount: result.toolCalls.length,
-      });
+      this.logger.debug(
+        {
+          finishReason: result.finishReason,
+          stepCount: result.steps.length,
+          toolCallCount: result.toolCalls.length,
+        },
+        'Generation complete',
+      );
 
       return {
         text: result.text,
@@ -76,7 +83,7 @@ export class LlmService {
       if (error.name === 'AbortError') {
         throw error;
       }
-      this.logger.error('Error calling Anthropic API:', error);
+      this.logger.error({ err: error }, 'Error calling Anthropic API');
       throw error;
     }
   }

@@ -9,6 +9,7 @@ Send me a message and I'll respond. Use /help to see available commands.`,
 
 /start - Welcome message
 /clear - Clear conversation history
+/timezone - Set your timezone
 /help - Show this help
 
 <i>Or just send me any message!</i>`,

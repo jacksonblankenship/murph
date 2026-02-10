@@ -24,6 +24,7 @@ export const ChunkPointSchema = z.object({
   title: z.string(),
   tags: z.array(z.string()),
   updatedAt: z.number(),
+  type: z.enum(['chunk', 'summary']).optional(),
 });
 
 /**

@@ -1,9 +1,15 @@
 import { HttpService } from '@nestjs/axios';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AxiosError } from 'axios';
+import { StatusCodes } from 'http-status-codes';
 import { MurLock } from 'murlock';
+import { PinoLogger } from 'nestjs-pino';
 import { firstValueFrom } from 'rxjs';
+
+/** Lock timeout in milliseconds for file operations */
+const LOCK_TIMEOUT_MS = 30_000;
+
 import {
   ObsidianNote,
   ObsidianNoteJsonSchema,
@@ -14,15 +20,16 @@ import {
 
 @Injectable()
 export class ObsidianService {
-  private readonly logger = new Logger(ObsidianService.name);
   private readonly apiUrl: string;
   private readonly apiKey: string;
   private readonly excludePatterns: string[];
 
   constructor(
+    private readonly logger: PinoLogger,
     private configService: ConfigService,
     private httpService: HttpService,
   ) {
+    this.logger.setContext(ObsidianService.name);
     this.apiUrl = this.configService.get<string>('obsidian.apiUrl');
     this.apiKey = this.configService.get<string>('obsidian.apiKey');
     this.excludePatterns = this.configService.get<string[]>(
@@ -65,10 +72,13 @@ export class ObsidianService {
         content: response.data,
       };
     } catch (error) {
-      if (error instanceof AxiosError && error.response?.status === 404) {
+      if (
+        error instanceof AxiosError &&
+        error.response?.status === StatusCodes.NOT_FOUND
+      ) {
         return null;
       }
-      this.logger.error(`Error reading note ${path}:`, error.message);
+      this.logger.error({ err: error, path }, 'Error reading note');
       throw error;
     }
   }
@@ -94,26 +104,69 @@ export class ObsidianService {
       const result = ObsidianNoteJsonSchema.safeParse(response.data);
       if (!result.success) {
         this.logger.error(
-          `Invalid note JSON response for ${path}:`,
-          result.error.message,
+          { path, error: result.error.message },
+          'Invalid note JSON response',
         );
         return null;
       }
 
       return new Date(result.data.stat.mtime);
     } catch (error) {
-      if (error instanceof AxiosError && error.response?.status === 404) {
+      if (
+        error instanceof AxiosError &&
+        error.response?.status === StatusCodes.NOT_FOUND
+      ) {
         return null;
       }
-      this.logger.error(
-        `Error getting modified date for ${path}:`,
-        error.message,
-      );
+      this.logger.error({ err: error, path }, 'Error getting modified date');
       throw error;
     }
   }
 
-  @MurLock(30000, 'path')
+  /**
+   * Gets the creation date of a note from Obsidian's file metadata.
+   * Uses the JSON response format from the Local REST API to get stat info.
+   *
+   * Replaces the deprecated `planted` frontmatter field for determining
+   * when a note was first created (e.g., orphan age detection).
+   */
+  async getCreatedDate(path: string): Promise<Date | null> {
+    try {
+      const normalizedPath = path.endsWith('.md') ? path : `${path}.md`;
+      const url = `${this.apiUrl}/vault/${encodeURIComponent(normalizedPath)}`;
+
+      const response = await firstValueFrom(
+        this.httpService.get(url, {
+          headers: {
+            Authorization: `Bearer ${this.apiKey}`,
+            Accept: 'application/vnd.olrapi.note+json',
+          },
+        }),
+      );
+
+      const result = ObsidianNoteJsonSchema.safeParse(response.data);
+      if (!result.success) {
+        this.logger.error(
+          { path, error: result.error.message },
+          'Invalid note JSON response',
+        );
+        return null;
+      }
+
+      return new Date(result.data.stat.ctime);
+    } catch (error) {
+      if (
+        error instanceof AxiosError &&
+        error.response?.status === StatusCodes.NOT_FOUND
+      ) {
+        return null;
+      }
+      this.logger.error({ err: error, path }, 'Error getting created date');
+      throw error;
+    }
+  }
+
+  @MurLock(LOCK_TIMEOUT_MS, 'path')
   async writeNote(path: string, content: string): Promise<void> {
     try {
       const normalizedPath = path.endsWith('.md') ? path : `${path}.md`;
@@ -125,12 +178,12 @@ export class ObsidianService {
         }),
       );
     } catch (error) {
-      this.logger.error(`Error writing note ${path}:`, error.message);
+      this.logger.error({ err: error, path }, 'Error writing note');
       throw error;
     }
   }
 
-  @MurLock(30000, 'path')
+  @MurLock(LOCK_TIMEOUT_MS, 'path')
   async appendToNote(path: string, content: string): Promise<void> {
     try {
       const normalizedPath = path.endsWith('.md') ? path : `${path}.md`;
@@ -145,12 +198,12 @@ export class ObsidianService {
         }),
       );
     } catch (error) {
-      this.logger.error(`Error appending to note ${path}:`, error.message);
+      this.logger.error({ err: error, path }, 'Error appending to note');
       throw error;
     }
   }
 
-  @MurLock(30000, 'path')
+  @MurLock(LOCK_TIMEOUT_MS, 'path')
   async deleteNote(path: string): Promise<void> {
     try {
       const normalizedPath = path.endsWith('.md') ? path : `${path}.md`;
@@ -162,10 +215,13 @@ export class ObsidianService {
         }),
       );
     } catch (error) {
-      if (error instanceof AxiosError && error.response?.status === 404) {
+      if (
+        error instanceof AxiosError &&
+        error.response?.status === StatusCodes.NOT_FOUND
+      ) {
         return; // Already deleted
       }
-      this.logger.error(`Error deleting note ${path}:`, error.message);
+      this.logger.error({ err: error, path }, 'Error deleting note');
       throw error;
     }
   }
@@ -188,7 +244,10 @@ export class ObsidianService {
       const result = ObsidianNoteListSchema.safeParse(response.data);
 
       if (!result.success) {
-        this.logger.error('Invalid list response:', result.error.message);
+        this.logger.error(
+          { error: result.error.message },
+          'Invalid list response',
+        );
         return [];
       }
 
@@ -213,7 +272,38 @@ export class ObsidianService {
 
       return notes;
     } catch (error) {
-      this.logger.error('Error listing notes:', error.message);
+      if (error instanceof AxiosError) {
+        // 404 means the directory doesn't exist - treat as empty vault
+        if (error.response?.status === StatusCodes.NOT_FOUND) {
+          this.logger.warn({}, 'Vault directory not found, treating as empty');
+          return [];
+        }
+
+        // 401/403 means the API key is wrong or missing
+        if (
+          error.response?.status === StatusCodes.UNAUTHORIZED ||
+          error.response?.status === StatusCodes.FORBIDDEN
+        ) {
+          this.logger.error(
+            {},
+            'Obsidian Local REST API authentication failed. Ensure OBSIDIAN_API_KEY is set correctly in your environment.',
+          );
+
+          throw error;
+        }
+
+        // Connection failed - Obsidian not running or plugin misconfigured
+        if (error.code === 'ECONNREFUSED') {
+          this.logger.error(
+            {},
+            'Cannot connect to Obsidian Local REST API. Ensure Obsidian is running with the Local REST API plugin installed and enabled. The non-encrypted (HTTP) server must be enabled with binding host set to 0.0.0.0.',
+          );
+
+          throw error;
+        }
+      }
+
+      this.logger.error({ err: error }, 'Error listing notes');
       throw error;
     }
   }
@@ -238,13 +328,16 @@ export class ObsidianService {
       const result = ObsidianSearchResponseSchema.safeParse(response.data);
 
       if (!result.success) {
-        this.logger.error('Invalid search response:', result.error.message);
+        this.logger.error(
+          { error: result.error.message },
+          'Invalid search response',
+        );
         return [];
       }
 
       return result.data.filter(r => !this.shouldExclude(r.filename));
     } catch (error) {
-      this.logger.error('Error searching notes:', error.message);
+      this.logger.error({ err: error }, 'Error searching notes');
       throw error;
     }
   }

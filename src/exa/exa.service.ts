@@ -1,8 +1,9 @@
 import { HttpService } from '@nestjs/axios';
 import { CACHE_MANAGER, Cache } from '@nestjs/cache-manager';
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AxiosError } from 'axios';
+import { PinoLogger } from 'nestjs-pino';
 import { firstValueFrom } from 'rxjs';
 import { ExaResponseSchema, ExaSearchResult } from './exa.schemas';
 
@@ -10,14 +11,16 @@ const SEARCH_CACHE_TTL = 3600000; // 1 hour in milliseconds
 
 @Injectable()
 export class ExaService {
-  private readonly logger = new Logger(ExaService.name);
   private readonly exaApiUrl = 'https://api.exa.ai/search';
 
   constructor(
+    private readonly logger: PinoLogger,
     private configService: ConfigService,
     private httpService: HttpService,
     @Inject(CACHE_MANAGER) private cache: Cache,
-  ) {}
+  ) {
+    this.logger.setContext(ExaService.name);
+  }
 
   async search(query: string, numResults = 5): Promise<string> {
     const cacheKey = `exa:search:${query}:${numResults}`;
@@ -25,7 +28,7 @@ export class ExaService {
     // Check cache first
     const cached = await this.cache.get<string>(cacheKey);
     if (cached) {
-      this.logger.debug(`Cache hit for: ${query}`);
+      this.logger.debug({ query }, 'Cache hit');
       return cached;
     }
 
@@ -56,7 +59,10 @@ export class ExaService {
       const result = ExaResponseSchema.safeParse(response.data);
 
       if (!result.success) {
-        this.logger.error('Invalid Exa API response:', result.error.message);
+        this.logger.error(
+          { error: result.error.message },
+          'Invalid Exa API response',
+        );
         return this.formatResults([], query);
       }
 
@@ -64,11 +70,11 @@ export class ExaService {
 
       // Cache successful results
       await this.cache.set(cacheKey, formattedResult, SEARCH_CACHE_TTL);
-      this.logger.debug(`Cached search result for: ${query}`);
+      this.logger.debug({ query }, 'Cached search result');
 
       return formattedResult;
     } catch (error) {
-      this.logger.error('Exa search error:', error);
+      this.logger.error({ err: error }, 'Exa search error');
 
       if (error instanceof AxiosError) {
         const status = error.response?.status ?? 'unknown';

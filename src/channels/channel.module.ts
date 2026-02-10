@@ -6,32 +6,29 @@ import { MemoryModule } from '../memory/memory.module';
 import { ObsidianModule } from '../obsidian/obsidian.module';
 import { SchedulerModule } from '../scheduler/scheduler.module';
 import { SyncModule } from '../sync/sync.module';
+import { UserProfileModule } from '../user-profile';
 import { VectorModule } from '../vector/vector.module';
-import { ChannelOrchestratorService } from './channel-orchestrator.service';
 import { ChannelRegistry } from './channel.registry';
+import { ChannelOrchestratorService } from './channel-orchestrator.service';
 
 // Enrichers
 import { HistoryEnricher } from './enrichers/history.enricher';
-import { MemoryEnricher } from './enrichers/memory.enricher';
 import { TimeEnricher } from './enrichers/time.enricher';
 
 // Outputs
 import { NullOutput } from './outputs/null.output';
 import { TelegramOutput } from './outputs/telegram.output';
-
-// Transformers
-import { ProactiveTransformer } from './transformers/proactive.transformer';
-
-// Tool Factories
-import { MemoryToolFactory } from './tools/memory.factory';
-import { SchedulingToolFactory } from './tools/scheduling.factory';
-import { TimeToolFactory } from './tools/time.factory';
-import { WebSearchToolFactory } from './tools/web-search.factory';
-
 // Presets
 import { GardenTenderPreset } from './presets/garden-tender.preset';
 import { ScheduledPreset } from './presets/scheduled.preset';
 import { UserDirectPreset } from './presets/user-direct.preset';
+// Tool Factories
+import { CaptureToolFactory, GardenToolFactory } from './tools/garden.factory';
+import { SchedulingToolFactory } from './tools/scheduling.factory';
+import { TimeToolFactory } from './tools/time.factory';
+import { WebSearchToolFactory } from './tools/web-search.factory';
+// Transformers
+import { ProactiveTransformer } from './transformers/proactive.transformer';
 
 /**
  * Module providing the channel-based LLM orchestration system.
@@ -50,6 +47,7 @@ import { UserDirectPreset } from './presets/user-direct.preset';
     ExaModule,
     SchedulerModule,
     ObsidianModule,
+    UserProfileModule,
     VectorModule,
     SyncModule,
   ],
@@ -59,7 +57,6 @@ import { UserDirectPreset } from './presets/user-direct.preset';
     ChannelOrchestratorService,
 
     // Enrichers
-    MemoryEnricher,
     HistoryEnricher,
     TimeEnricher,
 
@@ -72,7 +69,8 @@ import { UserDirectPreset } from './presets/user-direct.preset';
 
     // Tool Factories
     TimeToolFactory,
-    MemoryToolFactory,
+    GardenToolFactory,
+    CaptureToolFactory,
     WebSearchToolFactory,
     SchedulingToolFactory,
 

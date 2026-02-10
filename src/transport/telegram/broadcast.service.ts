@@ -1,19 +1,30 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { PinoLogger } from 'nestjs-pino';
 import { InjectBot } from 'nestjs-telegraf';
 import { Telegraf } from 'telegraf';
 
+/** Default number of retry attempts for message delivery */
+const DEFAULT_MAX_RETRIES = 3;
+/** Base delay in milliseconds for exponential backoff */
+const RETRY_BASE_DELAY_MS = 1000;
+/** Interval in milliseconds to refresh typing indicator (Telegram typing lasts ~5s) */
+const TYPING_REFRESH_INTERVAL_MS = 4000;
+
 @Injectable()
 export class BroadcastService {
-  private readonly logger = new Logger(BroadcastService.name);
-
-  constructor(@InjectBot() private bot: Telegraf) {}
+  constructor(
+    private readonly logger: PinoLogger,
+    @InjectBot() private bot: Telegraf,
+  ) {
+    this.logger.setContext(BroadcastService.name);
+  }
 
   async sendMessage(userId: number, message: string): Promise<boolean> {
     try {
       await this.bot.telegram.sendMessage(userId, message);
       return true;
     } catch (error) {
-      this.logger.error(`Failed to send message to user ${userId}:`, error);
+      this.logger.error({ err: error, userId }, 'Failed to send message');
       return false;
     }
   }
@@ -21,14 +32,17 @@ export class BroadcastService {
   async sendMessageWithRetry(
     userId: number,
     message: string,
-    maxRetries = 3,
+    maxRetries = DEFAULT_MAX_RETRIES,
   ): Promise<boolean> {
     for (let i = 0; i < maxRetries; i++) {
       const success = await this.sendMessage(userId, message);
       if (success) return true;
 
       // Wait before retry (exponential backoff)
-      await new Promise(resolve => setTimeout(resolve, 1000 * 2 ** i));
+      const backoffMultiplier = 2 ** i;
+      await new Promise(resolve =>
+        setTimeout(resolve, RETRY_BASE_DELAY_MS * backoffMultiplier),
+      );
     }
     return false;
   }
@@ -39,8 +53,8 @@ export class BroadcastService {
       return true;
     } catch (error) {
       this.logger.error(
-        `Failed to send typing indicator to user ${userId}:`,
-        error,
+        { err: error, userId },
+        'Failed to send typing indicator',
       );
       return false;
     }
@@ -77,12 +91,12 @@ export class BroadcastService {
     // Send initial typing indicator
     await this.sendTypingIndicator(chatId);
 
-    // Refresh every 4 seconds (Telegram typing lasts ~5s)
+    // Refresh periodically (Telegram typing lasts ~5s)
     const interval = setInterval(() => {
       this.sendTypingIndicator(chatId).catch(() => {
         // Ignore errors - best effort
       });
-    }, 4000);
+    }, TYPING_REFRESH_INTERVAL_MS);
 
     try {
       return await fn();

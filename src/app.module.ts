@@ -10,6 +10,7 @@ import { CommonModule } from './common/common.module';
 import { configuration } from './config/configuration';
 import { LoggingModule } from './logging/logging.module';
 import { MessagesModule } from './messages/messages.module';
+import { PromptModule } from './prompts';
 import { SchedulerModule } from './scheduler/scheduler.module';
 import { SyncModule } from './sync/sync.module';
 import { TelegramModule } from './transport/telegram/telegram.module';
@@ -47,6 +48,7 @@ import { TelegramModule } from './transport/telegram/telegram.module';
     CommonModule,
     LoggingModule,
     CacheModule,
+    PromptModule,
     TelegrafModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({

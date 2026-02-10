@@ -1,5 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import type { ModelMessage } from 'ai';
+import { PinoLogger } from 'nestjs-pino';
 import { ExaService } from '../exa/exa.service';
 import type { ConversationMessage } from '../memory/conversation.schemas';
 import { ObsidianService } from '../obsidian/obsidian.service';
@@ -8,7 +9,7 @@ import { IndexSyncProcessor } from '../sync/index-sync.processor';
 import { EmbeddingService } from '../vector/embedding.service';
 import { QdrantService } from '../vector/qdrant.service';
 import { LlmService } from './llm.service';
-import { createMemoryTools } from './tools/memory.tools';
+import { createGardenTools } from './tools/garden';
 import { createSchedulingTools } from './tools/scheduling.tools';
 import { createTimeTools } from './tools/time.tools';
 import { createWebSearchTools } from './tools/web-search.tools';
@@ -20,8 +21,6 @@ export interface ChatResponse {
 
 @Injectable()
 export class ChatOrchestratorService {
-  private readonly logger = new Logger(ChatOrchestratorService.name);
-
   private readonly systemPrompt =
     `You are Murph, a friendly personal assistant and second brain.
 
@@ -44,6 +43,7 @@ export class ChatOrchestratorService {
 - Match the user's energy`;
 
   constructor(
+    private readonly logger: PinoLogger,
     private readonly llmService: LlmService,
     private readonly exaService: ExaService,
     private readonly schedulerService: SchedulerService,
@@ -51,7 +51,9 @@ export class ChatOrchestratorService {
     private readonly embeddingService: EmbeddingService,
     private readonly qdrantService: QdrantService,
     private readonly indexSyncProcessor: IndexSyncProcessor,
-  ) {}
+  ) {
+    this.logger.setContext(ChatOrchestratorService.name);
+  }
 
   /**
    * Generate a response to a user message.
@@ -82,10 +84,13 @@ export class ChatOrchestratorService {
       abortSignal,
       onStepFinish: ({ toolCalls, finishReason }) => {
         if (toolCalls.length > 0) {
-          this.logger.debug('Tool calls executed', {
-            finishReason,
-            tools: toolCalls.map(tc => tc.toolName),
-          });
+          this.logger.debug(
+            {
+              finishReason,
+              tools: toolCalls.map(tc => tc.toolName),
+            },
+            'Tool calls executed',
+          );
         }
       },
     });
@@ -100,7 +105,7 @@ export class ChatOrchestratorService {
     return {
       ...createTimeTools(),
       ...createWebSearchTools(this.exaService),
-      ...createMemoryTools({
+      ...createGardenTools({
         obsidianService: this.obsidianService,
         embeddingService: this.embeddingService,
         qdrantService: this.qdrantService,

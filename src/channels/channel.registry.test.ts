@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
+import { createMockLogger } from '../test/mocks/pino-logger.mock';
 import { ChannelRegistry } from './channel.registry';
 import type { ChannelConfig } from './channel.types';
 
@@ -15,7 +16,7 @@ describe('ChannelRegistry', () => {
   });
 
   beforeEach(() => {
-    registry = new ChannelRegistry(null as never);
+    registry = new ChannelRegistry(createMockLogger(), null as never);
   });
 
   describe('register', () => {

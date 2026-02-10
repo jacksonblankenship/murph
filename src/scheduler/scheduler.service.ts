@@ -1,24 +1,32 @@
 import { randomBytes } from 'node:crypto';
 import { InjectQueue } from '@nestjs/bullmq';
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import { MurLock } from 'murlock';
+import { PinoLogger } from 'nestjs-pino';
 import { RedisService } from '../redis/redis.service';
+
+/** Lock timeout in milliseconds for task operations */
+const LOCK_TIMEOUT_MS = 30_000;
+/** Number of random bytes for task ID generation (produces 16-char hex string) */
+const TASK_ID_BYTES = 8;
+
 import {
+  normalizeTimestamp,
   ScheduledTask,
   ScheduledTaskSchema,
   TaskType,
-  normalizeTimestamp,
 } from './task.schemas';
 
 @Injectable()
 export class SchedulerService implements OnModuleInit {
-  private readonly logger = new Logger(SchedulerService.name);
-
   constructor(
+    private readonly logger: PinoLogger,
     @InjectQueue('scheduled-tasks') private taskQueue: Queue,
     private redisService: RedisService,
-  ) {}
+  ) {
+    this.logger.setContext(SchedulerService.name);
+  }
 
   async onModuleInit() {
     // Recover scheduled tasks from Redis on startup
@@ -34,7 +42,6 @@ export class SchedulerService implements OnModuleInit {
       cronExpression?: string; // For recurring
     },
   ): Promise<{ taskId: string; scheduled: boolean; error?: string }> {
-    const redis = this.redisService.getClient();
     const taskId = this.generateTaskId();
 
     try {
@@ -94,7 +101,7 @@ export class SchedulerService implements OnModuleInit {
 
       return { taskId, scheduled: true };
     } catch (error) {
-      this.logger.error('Error scheduling task:', error);
+      this.logger.error({ err: error }, 'Error scheduling task');
       return {
         taskId,
         scheduled: false,
@@ -103,7 +110,7 @@ export class SchedulerService implements OnModuleInit {
     }
   }
 
-  @MurLock(30000, 'taskId')
+  @MurLock(LOCK_TIMEOUT_MS, 'taskId')
   async cancelTask(
     taskId: string,
     userId: number,
@@ -145,7 +152,7 @@ export class SchedulerService implements OnModuleInit {
 
       return { cancelled: true };
     } catch (error) {
-      this.logger.error('Error cancelling task:', error);
+      this.logger.error({ err: error }, 'Error cancelling task');
       return { cancelled: false, error: error.message };
     }
   }
@@ -182,8 +189,8 @@ export class SchedulerService implements OnModuleInit {
     const result = ScheduledTaskSchema.safeParse(JSON.parse(data));
     if (!result.success) {
       this.logger.error(
-        `Invalid task data for ${taskId}`,
-        result.error.message,
+        { taskId, error: result.error.message },
+        'Invalid task data',
       );
       return null;
     }
@@ -203,7 +210,8 @@ export class SchedulerService implements OnModuleInit {
 
     if (delay <= 0) {
       this.logger.warn(
-        `Task ${task.id} scheduled time is in the past, adding to queue immediately`,
+        { taskId: task.id },
+        'Task scheduled time is in the past, adding to queue immediately',
       );
       await this.taskQueue.add('execute-task', task, {
         jobId: task.id,
@@ -229,7 +237,7 @@ export class SchedulerService implements OnModuleInit {
   }
 
   private async recoverScheduledTasks(): Promise<void> {
-    this.logger.log('Recovering scheduled tasks from Redis...');
+    this.logger.info({}, 'Recovering scheduled tasks from Redis...');
     const redis = this.redisService.getClient();
 
     try {
@@ -244,8 +252,8 @@ export class SchedulerService implements OnModuleInit {
         const result = ScheduledTaskSchema.safeParse(JSON.parse(data));
         if (!result.success) {
           this.logger.error(
-            `Invalid task data for ${key}`,
-            result.error.message,
+            { key, error: result.error.message },
+            'Invalid task data',
           );
           continue;
         }
@@ -268,13 +276,13 @@ export class SchedulerService implements OnModuleInit {
         recovered++;
       }
 
-      this.logger.log(`Recovered ${recovered} scheduled tasks`);
+      this.logger.info({ count: recovered }, 'Recovered scheduled tasks');
     } catch (error) {
-      this.logger.error('Error recovering scheduled tasks:', error);
+      this.logger.error({ err: error }, 'Error recovering scheduled tasks');
     }
   }
 
   private generateTaskId(): string {
-    return randomBytes(8).toString('hex');
+    return randomBytes(TASK_ID_BYTES).toString('hex');
   }
 }

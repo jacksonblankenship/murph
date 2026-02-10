@@ -1,5 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { ConversationService } from '../../memory/conversation.service';
+import { Injectable } from '@nestjs/common';
+import { PinoLogger } from 'nestjs-pino';
+import { ConversationRetrieverService } from '../../memory/conversation-retriever.service';
 import type {
   ContextEnricher,
   EnrichmentRequest,
@@ -7,34 +8,54 @@ import type {
 } from '../channel.types';
 
 /**
- * Enriches context with conversation history.
+ * Enriches context with conversation history and long-term memory.
  *
- * Retrieves recent conversation messages from Redis
- * to maintain conversational continuity.
+ * Uses hybrid retrieval:
+ * - Recent messages from Redis (maintains tool_use/tool_result integrity)
+ * - Semantically similar past conversations from Qdrant
+ * - Relevant Obsidian notes for long-term knowledge
  */
 @Injectable()
 export class HistoryEnricher implements ContextEnricher {
-  private readonly logger = new Logger(HistoryEnricher.name);
-
-  constructor(private readonly conversationService: ConversationService) {}
+  constructor(
+    private readonly logger: PinoLogger,
+    private readonly conversationRetriever: ConversationRetrieverService,
+  ) {
+    this.logger.setContext(HistoryEnricher.name);
+  }
 
   async enrich(request: EnrichmentRequest): Promise<EnrichmentResult> {
     try {
-      const history = await this.conversationService.getConversation(
-        request.userId,
-      );
+      const { messages, longTermContext } =
+        await this.conversationRetriever.retrieve(
+          request.userId,
+          request.message,
+          {
+            recentCount: 5,
+            semanticCount: 3,
+            semanticThreshold: 0.7,
+          },
+        );
 
       this.logger.debug(
-        `Retrieved ${history.length} history messages for user ${request.userId}`,
+        {
+          messageCount: messages.length,
+          userId: request.userId,
+          hasLongTermContext: !!longTermContext,
+        },
+        'Retrieved hybrid context',
       );
 
       return {
-        conversationHistory: history,
+        conversationHistory: messages,
+        contextAdditions: longTermContext
+          ? `[Long-term memory from your notes:]\n${longTermContext}`
+          : undefined,
       };
     } catch (error) {
       this.logger.warn(
-        'Failed to enrich with conversation history:',
-        error.message,
+        { err: error },
+        'Failed to enrich with conversation context',
       );
       return {
         conversationHistory: [],

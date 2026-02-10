@@ -1,11 +1,17 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { Job } from 'bullmq';
+import { PinoLogger } from 'nestjs-pino';
 import { ChannelOrchestratorService } from '../channels/channel-orchestrator.service';
 import { SCHEDULED_PROACTIVE_CHANNEL_ID } from '../channels/presets/scheduled.preset';
 import { RedisService } from '../redis/redis.service';
 import { BroadcastService } from '../transport/telegram/broadcast.service';
 import { ActiveRequestData, QueuedScheduledMessage } from './message.schemas';
+
+/** Preview length for logging scheduled task prompts */
+const LOG_PREVIEW_LENGTH = 100;
+/** TTL in seconds for active request tracking (5 minutes) */
+const ACTIVE_REQUEST_TTL_SECONDS = 300;
 
 /**
  * Processes scheduled messages through the proactive channel.
@@ -19,23 +25,27 @@ import { ActiveRequestData, QueuedScheduledMessage } from './message.schemas';
 @Processor('scheduled-messages')
 @Injectable()
 export class ScheduledMessageProcessor extends WorkerHost {
-  private readonly logger = new Logger(ScheduledMessageProcessor.name);
-
   constructor(
+    private readonly logger: PinoLogger,
     private readonly channelOrchestrator: ChannelOrchestratorService,
     private readonly redisService: RedisService,
     private readonly broadcastService: BroadcastService,
   ) {
     super();
+    this.logger.setContext(ScheduledMessageProcessor.name);
   }
 
   async process(job: Job<QueuedScheduledMessage>): Promise<void> {
     const message = job.data;
 
-    this.logger.log(
-      `Processing task ${message.taskId} for user ${message.userId}`,
+    this.logger.info(
+      { taskId: message.taskId, userId: message.userId },
+      'Processing scheduled task',
     );
-    this.logger.debug(`Prompt: "${message.content.substring(0, 100)}..."`);
+    this.logger.debug(
+      { prompt: message.content.substring(0, LOG_PREVIEW_LENGTH) },
+      'Scheduled task prompt',
+    );
 
     try {
       // NO ABORT CHECKING - scheduled messages always run to completion
@@ -58,18 +68,22 @@ export class ScheduledMessageProcessor extends WorkerHost {
         ),
       );
 
-      this.logger.log(
-        `Completed task ${message.taskId} for user ${message.userId}`,
+      this.logger.info(
+        { taskId: message.taskId, userId: message.userId },
+        'Completed scheduled task',
       );
 
       // Clear active request
       await this.clearActiveScheduledRequest(message.userId);
     } catch (error) {
-      this.logger.error('Failed to process scheduled message:', {
-        userId: message.userId,
-        taskId: message.taskId,
-        error: error.message,
-      });
+      this.logger.error(
+        {
+          err: error,
+          userId: message.userId,
+          taskId: message.taskId,
+        },
+        'Failed to process scheduled message',
+      );
       await this.clearActiveScheduledRequest(message.userId);
       throw error; // Let BullMQ handle retry
     }
@@ -90,7 +104,7 @@ export class ScheduledMessageProcessor extends WorkerHost {
     };
     await this.redisService
       .getClient()
-      .set(key, JSON.stringify(data), 'EX', 300); // 5 minute TTL
+      .set(key, JSON.stringify(data), 'EX', ACTIVE_REQUEST_TTL_SECONDS);
   }
 
   /**

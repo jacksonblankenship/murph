@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { createMockLogger } from '../test/mocks/pino-logger.mock';
 import { ChunkingService } from './chunking.service';
 
 describe('ChunkingService', () => {
@@ -14,7 +15,10 @@ describe('ChunkingService', () => {
       }),
     };
 
-    service = new ChunkingService(mockConfigService as never);
+    service = new ChunkingService(
+      createMockLogger(),
+      mockConfigService as never,
+    );
   });
 
   describe('chunkMarkdown', () => {

@@ -1,22 +1,29 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import { CACHE_MANAGER, Cache } from '@nestjs/cache-manager';
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { embed, embedMany } from 'ai';
+import { PinoLogger } from 'nestjs-pino';
 
-const EMBEDDING_CACHE_TTL = 86400000; // 24 hours in milliseconds
+/** 24 hours in milliseconds for embedding cache */
+const EMBEDDING_CACHE_TTL = 86_400_000;
+/** Padding for hash byte conversion */
+const BYTE_PAD_LENGTH = 2;
+/** Hexadecimal radix for hash conversion */
+const HEX_RADIX = 16;
 
 @Injectable()
 export class EmbeddingService {
-  private readonly logger = new Logger(EmbeddingService.name);
   private readonly model: ReturnType<
     ReturnType<typeof createOpenAI>['embedding']
   >;
 
   constructor(
+    private readonly logger: PinoLogger,
     private configService: ConfigService,
     @Inject(CACHE_MANAGER) private cache: Cache,
   ) {
+    this.logger.setContext(EmbeddingService.name);
     const openai = createOpenAI({
       apiKey: this.configService.get<string>('openai.apiKey'),
     });
@@ -28,7 +35,9 @@ export class EmbeddingService {
     const data = encoder.encode(content);
     const hashBuffer = await crypto.subtle.digest('SHA-256', data);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    return hashArray
+      .map(b => b.toString(HEX_RADIX).padStart(BYTE_PAD_LENGTH, '0'))
+      .join('');
   }
 
   async embed(text: string): Promise<number[]> {
@@ -52,7 +61,7 @@ export class EmbeddingService {
 
       return result.embedding;
     } catch (error) {
-      this.logger.error('Error generating embedding:', error.message);
+      this.logger.error({ err: error }, 'Error generating embedding');
       throw error;
     }
   }
@@ -81,7 +90,7 @@ export class EmbeddingService {
 
     // If all cached, return early
     if (uncachedTexts.length === 0) {
-      this.logger.debug(`All ${texts.length} embeddings from cache`);
+      this.logger.debug({ count: texts.length }, 'All embeddings from cache');
       return results as number[][];
     }
 
@@ -105,12 +114,16 @@ export class EmbeddingService {
       }
 
       this.logger.debug(
-        `Generated ${uncachedTexts.length} embeddings, ${texts.length - uncachedTexts.length} from cache`,
+        {
+          generated: uncachedTexts.length,
+          cached: texts.length - uncachedTexts.length,
+        },
+        'Generated embeddings',
       );
 
       return results as number[][];
     } catch (error) {
-      this.logger.error('Error generating batch embeddings:', error.message);
+      this.logger.error({ err: error }, 'Error generating batch embeddings');
       throw error;
     }
   }

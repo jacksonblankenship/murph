@@ -1,6 +1,8 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { QdrantClient } from '@qdrant/js-client-rest';
+import { PinoLogger } from 'nestjs-pino';
+import type { ConversationTurnPayload } from '../memory/conversation-turn.schemas';
 import type { Chunk } from './chunking.service';
 import {
   type ChunkPoint,
@@ -9,7 +11,25 @@ import {
   type VectorPoint,
 } from './vector.schemas';
 
-const VECTOR_DIMENSION = 1536; // OpenAI text-embedding-3-small
+/** OpenAI text-embedding-3-small vector dimension */
+const VECTOR_DIMENSION = 1536;
+const CONVERSATION_COLLECTION = 'conversation-turns';
+
+/** Default number of results for search operations */
+const DEFAULT_SEARCH_LIMIT = 5;
+/** Batch size for scrolling through collections */
+const SCROLL_BATCH_SIZE = 100;
+/** UUID segment boundaries for formatting hashes as UUIDs (8-4-4-4-12 format) */
+// biome-ignore lint/style/noMagicNumbers: these define the UUID segment boundaries
+const UUID_SEGMENTS = [0, 8, 12, 16, 20, 32] as const;
+/** Hash padding length */
+const HASH_PAD_LENGTH = 32;
+/** Hash radix (hexadecimal) */
+const HEX_RADIX = 16;
+/** Default score for non-search results */
+const DEFAULT_SCORE = 1.0;
+/** Padding for hash byte conversion */
+const BYTE_PAD_LENGTH = 2;
 
 export interface ChunkUpsertData {
   chunk: Chunk;
@@ -21,13 +41,25 @@ export interface ChunkUpsertData {
   tags: string[];
 }
 
+export interface SummaryUpsertData {
+  embedding: number[];
+  path: string;
+  documentHash: string;
+  title: string;
+  tags: string[];
+  summary: string;
+}
+
 @Injectable()
 export class QdrantService implements OnModuleInit {
-  private readonly logger = new Logger(QdrantService.name);
   private readonly client: QdrantClient;
   private readonly collectionName: string;
 
-  constructor(private configService: ConfigService) {
+  constructor(
+    private readonly logger: PinoLogger,
+    private configService: ConfigService,
+  ) {
+    this.logger.setContext(QdrantService.name);
     const qdrantUrl = this.configService.get<string>('vector.qdrantUrl');
     this.collectionName = this.configService.get<string>(
       'vector.collectionName',
@@ -36,7 +68,10 @@ export class QdrantService implements OnModuleInit {
   }
 
   async onModuleInit() {
-    await this.initCollection();
+    await Promise.all([
+      this.initCollection(),
+      this.ensureConversationCollection(),
+    ]);
   }
 
   async initCollection(): Promise<void> {
@@ -53,12 +88,18 @@ export class QdrantService implements OnModuleInit {
             distance: 'Cosine',
           },
         });
-        this.logger.log(`Created collection: ${this.collectionName}`);
+        this.logger.info(
+          { collectionName: this.collectionName },
+          'Created collection',
+        );
       } else {
-        this.logger.log(`Collection exists: ${this.collectionName}`);
+        this.logger.info(
+          { collectionName: this.collectionName },
+          'Collection exists',
+        );
       }
     } catch (error) {
-      this.logger.error('Error initializing Qdrant collection:', error.message);
+      this.logger.error({ err: error }, 'Error initializing Qdrant collection');
       throw error;
     }
   }
@@ -91,7 +132,7 @@ export class QdrantService implements OnModuleInit {
         ],
       });
     } catch (error) {
-      this.logger.error(`Error upserting note ${path}:`, error.message);
+      this.logger.error({ err: error, path }, 'Error upserting note');
       throw error;
     }
   }
@@ -109,7 +150,7 @@ export class QdrantService implements OnModuleInit {
         },
       });
     } catch (error) {
-      this.logger.error(`Error deleting note ${path}:`, error.message);
+      this.logger.error({ err: error, path }, 'Error deleting note');
       throw error;
     }
   }
@@ -129,9 +170,9 @@ export class QdrantService implements OnModuleInit {
           ],
         },
       });
-      this.logger.debug(`Deleted all chunks for: ${path}`);
+      this.logger.debug({ path }, 'Deleted all chunks');
     } catch (error) {
-      this.logger.error(`Error deleting chunks for ${path}:`, error.message);
+      this.logger.error({ err: error, path }, 'Error deleting chunks');
       throw error;
     }
   }
@@ -164,9 +205,77 @@ export class QdrantService implements OnModuleInit {
       });
 
       await this.client.upsert(this.collectionName, { points });
-      this.logger.debug(`Upserted ${chunks.length} chunks`);
+      this.logger.debug({ count: chunks.length }, 'Upserted chunks');
     } catch (error) {
-      this.logger.error('Error upserting chunks:', error.message);
+      this.logger.error({ err: error }, 'Error upserting chunks');
+      throw error;
+    }
+  }
+
+  /**
+   * Upsert a summary-level embedding for document-level search and dedup.
+   * Uses a separate ID pattern (path:summary) to avoid collisions with chunk IDs.
+   */
+  async upsertSummary(data: SummaryUpsertData): Promise<void> {
+    try {
+      const id = this.chunkToId(data.path, -1); // Use -1 as sentinel for summary
+      await this.client.upsert(this.collectionName, {
+        points: [
+          {
+            id,
+            vector: data.embedding,
+            payload: {
+              path: data.path,
+              chunkIndex: -1,
+              totalChunks: 0,
+              heading: null,
+              contentPreview: data.summary,
+              contentHash: '',
+              documentHash: data.documentHash,
+              title: data.title,
+              tags: data.tags,
+              updatedAt: Date.now(),
+              type: 'summary',
+            } satisfies ChunkPoint,
+          },
+        ],
+      });
+      this.logger.debug({ path: data.path }, 'Upserted summary embedding');
+    } catch (error) {
+      this.logger.error({ err: error }, 'Error upserting summary');
+      throw error;
+    }
+  }
+
+  /**
+   * Search for similar notes using summary embeddings only.
+   * Used for document-level similarity (dedup, search).
+   */
+  async searchSummaries(
+    embedding: number[],
+    limit = DEFAULT_SEARCH_LIMIT,
+  ): Promise<ChunkSearchResult[]> {
+    try {
+      const results = await this.client.search(this.collectionName, {
+        vector: embedding,
+        limit,
+        with_payload: true,
+        filter: {
+          must: [{ key: 'type', match: { value: 'summary' } }],
+        },
+      });
+
+      return results.map(r => ({
+        path: r.payload?.path as string,
+        score: r.score,
+        chunkIndex: r.payload?.chunkIndex as number,
+        totalChunks: r.payload?.totalChunks as number,
+        heading: r.payload?.heading as string | null,
+        contentPreview: r.payload?.contentPreview as string,
+        title: r.payload?.title as string,
+      }));
+    } catch (error) {
+      this.logger.error({ err: error }, 'Error searching summaries');
       throw error;
     }
   }
@@ -176,7 +285,7 @@ export class QdrantService implements OnModuleInit {
    */
   async searchSimilarChunks(
     embedding: number[],
-    limit = 5,
+    limit = DEFAULT_SEARCH_LIMIT,
   ): Promise<ChunkSearchResult[]> {
     try {
       const results = await this.client.search(this.collectionName, {
@@ -195,7 +304,7 @@ export class QdrantService implements OnModuleInit {
         title: r.payload?.title as string,
       }));
     } catch (error) {
-      this.logger.error('Error searching similar chunks:', error.message);
+      this.logger.error({ err: error }, 'Error searching similar chunks');
       throw error;
     }
   }
@@ -226,7 +335,7 @@ export class QdrantService implements OnModuleInit {
       return results.points
         .map(p => ({
           path: p.payload?.path as string,
-          score: 1.0,
+          score: DEFAULT_SCORE,
           chunkIndex: p.payload?.chunkIndex as number,
           totalChunks: p.payload?.totalChunks as number,
           heading: p.payload?.heading as string | null,
@@ -235,12 +344,15 @@ export class QdrantService implements OnModuleInit {
         }))
         .sort((a, b) => a.chunkIndex - b.chunkIndex);
     } catch (error) {
-      this.logger.error('Error getting surrounding chunks:', error.message);
+      this.logger.error({ err: error }, 'Error getting surrounding chunks');
       throw error;
     }
   }
 
-  async searchSimilar(embedding: number[], limit = 5): Promise<SearchResult[]> {
+  async searchSimilar(
+    embedding: number[],
+    limit = DEFAULT_SEARCH_LIMIT,
+  ): Promise<SearchResult[]> {
     try {
       const results = await this.client.search(this.collectionName, {
         vector: embedding,
@@ -254,7 +366,7 @@ export class QdrantService implements OnModuleInit {
         content: r.payload?.content as string,
       }));
     } catch (error) {
-      this.logger.error('Error searching similar notes:', error.message);
+      this.logger.error({ err: error }, 'Error searching similar notes');
       throw error;
     }
   }
@@ -269,7 +381,7 @@ export class QdrantService implements OnModuleInit {
 
     try {
       let offset: string | number | Record<string, unknown> | undefined;
-      const batchSize = 100;
+      const batchSize = SCROLL_BATCH_SIZE;
 
       while (true) {
         const result = await this.client.scroll(this.collectionName, {
@@ -292,7 +404,7 @@ export class QdrantService implements OnModuleInit {
         if (!offset) break;
       }
     } catch (error) {
-      this.logger.error('Error getting indexed paths:', error.message);
+      this.logger.error({ err: error }, 'Error getting indexed paths');
       throw error;
     }
 
@@ -312,7 +424,7 @@ export class QdrantService implements OnModuleInit {
 
     try {
       let offset: string | number | Record<string, unknown> | undefined;
-      const batchSize = 100;
+      const batchSize = SCROLL_BATCH_SIZE;
 
       while (true) {
         const result = await this.client.scroll(this.collectionName, {
@@ -342,7 +454,7 @@ export class QdrantService implements OnModuleInit {
         if (!offset) break;
       }
     } catch (error) {
-      this.logger.error('Error getting indexed documents:', error.message);
+      this.logger.error({ err: error }, 'Error getting indexed documents');
       throw error;
     }
 
@@ -367,24 +479,154 @@ export class QdrantService implements OnModuleInit {
       if (results.points.length === 0) return null;
       return results.points[0].payload?.contentHash as string;
     } catch (error) {
-      this.logger.error(
-        `Error getting content hash for ${path}:`,
-        error.message,
-      );
+      this.logger.error({ err: error, path }, 'Error getting content hash');
       return null;
     }
+  }
+
+  // ============================================
+  // Conversation Turn Methods
+  // ============================================
+
+  /**
+   * Ensure the conversation-turns collection exists.
+   * Called during module initialization.
+   */
+  async ensureConversationCollection(): Promise<void> {
+    try {
+      const collections = await this.client.getCollections();
+      const exists = collections.collections.some(
+        c => c.name === CONVERSATION_COLLECTION,
+      );
+
+      if (!exists) {
+        await this.client.createCollection(CONVERSATION_COLLECTION, {
+          vectors: {
+            size: VECTOR_DIMENSION,
+            distance: 'Cosine',
+          },
+        });
+        this.logger.info(
+          { collectionName: CONVERSATION_COLLECTION },
+          'Created conversation collection',
+        );
+      }
+    } catch (error) {
+      this.logger.error(
+        { err: error },
+        'Error initializing conversation collection',
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Store a conversation turn with its embedding for semantic search.
+   * @param id UUIDv7 for time-sortable ordering
+   * @param embedding Vector embedding of the turn content
+   * @param payload Turn metadata (userId, messages, timestamp, etc.)
+   */
+  async upsertConversationTurn(
+    id: string,
+    embedding: number[],
+    payload: ConversationTurnPayload,
+  ): Promise<void> {
+    try {
+      await this.client.upsert(CONVERSATION_COLLECTION, {
+        points: [{ id, vector: embedding, payload }],
+      });
+    } catch (error) {
+      this.logger.error({ err: error }, 'Error upserting conversation turn');
+      throw error;
+    }
+  }
+
+  /**
+   * Search for semantically similar conversation turns.
+   * @param embedding Query embedding
+   * @param userId Filter to specific user
+   * @param limit Maximum results to return
+   * @returns Matching turns with scores
+   */
+  async searchConversationTurns(
+    embedding: number[],
+    userId: number,
+    limit = DEFAULT_SEARCH_LIMIT,
+  ): Promise<Array<ConversationTurnPayload & { score: number }>> {
+    try {
+      const results = await this.client.search(CONVERSATION_COLLECTION, {
+        vector: embedding,
+        filter: {
+          must: [{ key: 'userId', match: { value: userId } }],
+        },
+        limit,
+        with_payload: true,
+      });
+
+      return results.map(r => ({
+        userId: r.payload?.userId as number,
+        userMessage: r.payload?.userMessage as string,
+        assistantResponse: r.payload?.assistantResponse as string,
+        timestamp: r.payload?.timestamp as number,
+        toolsUsed: r.payload?.toolsUsed as string[] | undefined,
+        score: r.score,
+      }));
+    } catch (error) {
+      this.logger.error({ err: error }, 'Error searching conversation turns');
+      throw error;
+    }
+  }
+
+  /**
+   * Delete old conversation turns for a user.
+   * Used for cleanup of turns older than retention period.
+   * @param userId User to clean up
+   * @param beforeTimestamp Delete turns older than this timestamp
+   */
+  async deleteOldConversationTurns(
+    userId: number,
+    beforeTimestamp: number,
+  ): Promise<void> {
+    try {
+      await this.client.delete(CONVERSATION_COLLECTION, {
+        filter: {
+          must: [
+            { key: 'userId', match: { value: userId } },
+            { key: 'timestamp', range: { lt: beforeTimestamp } },
+          ],
+        },
+      });
+      this.logger.debug(
+        { userId, beforeTimestamp },
+        'Deleted old conversation turns',
+      );
+    } catch (error) {
+      this.logger.error(
+        { err: error },
+        'Error deleting old conversation turns',
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Formats a 32-character hash string as a UUID
+   */
+  private formatAsUuid(hash: string): string {
+    const [s0, s1, s2, s3, s4, s5] = UUID_SEGMENTS;
+    return `${hash.substring(s0, s1)}-${hash.substring(s1, s2)}-${hash.substring(s2, s3)}-${hash.substring(s3, s4)}-${hash.substring(s4, s5)}`;
   }
 
   private pathToId(path: string): string {
     // Generate a UUID-like ID from the path using a hash
     const hash = this.simpleHash(path);
-    return `${hash.substring(0, 8)}-${hash.substring(8, 12)}-${hash.substring(12, 16)}-${hash.substring(16, 20)}-${hash.substring(20, 32)}`;
+    return this.formatAsUuid(hash);
   }
 
   private chunkToId(path: string, chunkIndex: number): string {
     // Generate a UUID-like ID from path + chunk index
     const hash = this.simpleHash(`${path}:chunk:${chunkIndex}`);
-    return `${hash.substring(0, 8)}-${hash.substring(8, 12)}-${hash.substring(12, 16)}-${hash.substring(16, 20)}-${hash.substring(20, 32)}`;
+    return this.formatAsUuid(hash);
   }
 
   private simpleHash(str: string): string {
@@ -394,7 +636,7 @@ export class QdrantService implements OnModuleInit {
       hash = (hash << 5) - hash + char;
       hash = hash & hash;
     }
-    return Math.abs(hash).toString(16).padStart(32, '0');
+    return Math.abs(hash).toString(HEX_RADIX).padStart(HASH_PAD_LENGTH, '0');
   }
 
   private async hashContent(content: string): Promise<string> {
@@ -408,7 +650,9 @@ export class QdrantService implements OnModuleInit {
     if (typeof hashBuffer === 'string') return hashBuffer;
 
     const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    return hashArray
+      .map(b => b.toString(HEX_RADIX).padStart(BYTE_PAD_LENGTH, '0'))
+      .join('');
   }
 
   private extractTitle(path: string): string {

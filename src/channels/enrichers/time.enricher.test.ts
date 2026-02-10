@@ -1,10 +1,20 @@
-import { describe, expect, test } from 'bun:test';
+import { beforeEach, describe, expect, test } from 'bun:test';
+import type { UserProfileService } from '../../user-profile';
 import type { EnrichmentRequest } from '../channel.types';
 import { TimeEnricher } from './time.enricher';
 
-describe('TimeEnricher', () => {
-  const enricher = new TimeEnricher();
+/**
+ * Creates a mock UserProfileService for testing.
+ */
+function createMockUserProfileService(
+  timezone?: string,
+): Pick<UserProfileService, 'getTimezone'> {
+  return {
+    getTimezone: async () => timezone,
+  };
+}
 
+describe('TimeEnricher', () => {
   const mockRequest: EnrichmentRequest = {
     message: 'Hello',
     userId: 123,
@@ -12,6 +22,10 @@ describe('TimeEnricher', () => {
 
   describe('enrich', () => {
     test('returns context with current time', async () => {
+      const enricher = new TimeEnricher(
+        createMockUserProfileService() as UserProfileService,
+      );
+
       const result = await enricher.enrich(mockRequest);
 
       expect(result.contextAdditions).toBeDefined();
@@ -19,6 +33,10 @@ describe('TimeEnricher', () => {
     });
 
     test('includes formatted date with day of week', async () => {
+      const enricher = new TimeEnricher(
+        createMockUserProfileService() as UserProfileService,
+      );
+
       const result = await enricher.enrich(mockRequest);
 
       // Should contain a day of week (one of these)
@@ -39,6 +57,10 @@ describe('TimeEnricher', () => {
     });
 
     test('includes year', async () => {
+      const enricher = new TimeEnricher(
+        createMockUserProfileService() as UserProfileService,
+      );
+
       const result = await enricher.enrich(mockRequest);
       const currentYear = new Date().getFullYear().toString();
 
@@ -46,9 +68,37 @@ describe('TimeEnricher', () => {
     });
 
     test('does not return conversation history', async () => {
+      const enricher = new TimeEnricher(
+        createMockUserProfileService() as UserProfileService,
+      );
+
       const result = await enricher.enrich(mockRequest);
 
       expect(result.conversationHistory).toBeUndefined();
+    });
+
+    test('falls back to UTC when no timezone is set', async () => {
+      const enricher = new TimeEnricher(
+        createMockUserProfileService() as UserProfileService,
+      );
+
+      const result = await enricher.enrich(mockRequest);
+
+      expect(result.contextAdditions).toContain('UTC');
+    });
+
+    test('uses user timezone when set', async () => {
+      const enricher = new TimeEnricher(
+        createMockUserProfileService('America/New_York') as UserProfileService,
+      );
+
+      const result = await enricher.enrich(mockRequest);
+
+      // Should contain EST or EDT depending on time of year
+      const hasEasternTime =
+        result.contextAdditions?.includes('EST') ||
+        result.contextAdditions?.includes('EDT');
+      expect(hasEasternTime).toBe(true);
     });
   });
 });

@@ -1,5 +1,6 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, OnModuleDestroy } from '@nestjs/common';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
+import { PinoLogger } from 'nestjs-pino';
 import { ChannelOrchestratorService } from '../channels/channel-orchestrator.service';
 import { USER_DIRECT_CHANNEL_ID } from '../channels/presets/user-direct.preset';
 import { AppClsService } from '../common/cls.service';
@@ -29,8 +30,6 @@ interface PendingMessage {
  */
 @Injectable()
 export class MessageOrchestrator implements OnModuleDestroy {
-  private readonly logger = new Logger(MessageOrchestrator.name);
-
   private pendingMessages = new Map<number, PendingMessage[]>();
   private abortControllers = new Map<number, AbortController>();
   private debounceTimers = new Map<number, NodeJS.Timeout>();
@@ -38,11 +37,14 @@ export class MessageOrchestrator implements OnModuleDestroy {
   private readonly DEBOUNCE_MS = 2000;
 
   constructor(
+    private readonly logger: PinoLogger,
     private readonly channelOrchestrator: ChannelOrchestratorService,
     private readonly eventEmitter: EventEmitter2,
     private readonly clsService: AppClsService,
     private readonly broadcastService: BroadcastService,
-  ) {}
+  ) {
+    this.logger.setContext(MessageOrchestrator.name);
+  }
 
   onModuleDestroy() {
     // Clean up timers on shutdown
@@ -61,7 +63,7 @@ export class MessageOrchestrator implements OnModuleDestroy {
     // Abort any in-flight LLM call for this user
     const existingController = this.abortControllers.get(userId);
     if (existingController) {
-      this.logger.log(`Aborting in-flight request for user ${userId}`);
+      this.logger.info({ userId }, 'Aborting in-flight request');
       existingController.abort();
       this.abortControllers.delete(userId);
     }
@@ -84,10 +86,7 @@ export class MessageOrchestrator implements OnModuleDestroy {
           this.processMessages(userId, chatId),
         )
         .catch(err => {
-          this.logger.error(
-            `Failed to process messages for user ${userId}:`,
-            err,
-          );
+          this.logger.error({ err, userId }, 'Failed to process messages');
         });
     }, this.DEBOUNCE_MS);
 
@@ -140,15 +139,16 @@ export class MessageOrchestrator implements OnModuleDestroy {
       this.abortControllers.delete(userId);
     } catch (error) {
       if (error.name === 'AbortError') {
-        this.logger.log(
-          `Request aborted for user ${userId}, will retry with new context`,
+        this.logger.info(
+          { userId },
+          'Request aborted, will retry with new context',
         );
         return; // Don't rethrow - new message will trigger fresh processing
       }
 
       this.abortControllers.delete(userId);
 
-      this.logger.error(`Error processing messages for user ${userId}:`, error);
+      this.logger.error({ err: error, userId }, 'Error processing messages');
 
       // Emit error message to user
       const errorEvent: MessageBroadcastEvent = {

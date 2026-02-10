@@ -1,5 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { PinoLogger } from 'nestjs-pino';
 import { Events, type MessageBroadcastEvent } from '../../common/events';
 import type { OutputContext, OutputHandler } from '../channel.types';
 
@@ -11,9 +12,12 @@ import type { OutputContext, OutputHandler } from '../channel.types';
  */
 @Injectable()
 export class TelegramOutput implements OutputHandler {
-  private readonly logger = new Logger(TelegramOutput.name);
-
-  constructor(private readonly eventEmitter: EventEmitter2) {}
+  constructor(
+    private readonly logger: PinoLogger,
+    private readonly eventEmitter: EventEmitter2,
+  ) {
+    this.logger.setContext(TelegramOutput.name);
+  }
 
   async send(
     userId: number,
@@ -21,7 +25,8 @@ export class TelegramOutput implements OutputHandler {
     context: OutputContext,
   ): Promise<void> {
     this.logger.debug(
-      `Emitting broadcast for user ${userId} from channel ${context.channelId}`,
+      { userId, channelId: context.channelId },
+      'Emitting broadcast',
     );
 
     const event: MessageBroadcastEvent = {

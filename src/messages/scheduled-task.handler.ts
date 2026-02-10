@@ -1,7 +1,8 @@
 import { InjectQueue } from '@nestjs/bullmq';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { Queue } from 'bullmq';
+import { PinoLogger } from 'nestjs-pino';
 import { Events, type ScheduledTaskTriggeredEvent } from '../common/events';
 import type { QueuedScheduledMessage } from './message.schemas';
 
@@ -13,18 +14,19 @@ import type { QueuedScheduledMessage } from './message.schemas';
  */
 @Injectable()
 export class ScheduledTaskHandler {
-  private readonly logger = new Logger(ScheduledTaskHandler.name);
-
   constructor(
+    private readonly logger: PinoLogger,
     @InjectQueue('scheduled-messages')
     private readonly scheduledMessagesQueue: Queue<QueuedScheduledMessage>,
-  ) {}
+  ) {
+    this.logger.setContext(ScheduledTaskHandler.name);
+  }
 
   @OnEvent(Events.SCHEDULED_TASK_TRIGGERED)
   async handleScheduledTask(event: ScheduledTaskTriggeredEvent): Promise<void> {
     const { userId, taskId, message } = event;
 
-    this.logger.log(`Queueing scheduled task ${taskId} for LLM processing`);
+    this.logger.info({ taskId }, 'Queueing scheduled task for LLM processing');
 
     const queuedMessage: QueuedScheduledMessage = {
       userId,

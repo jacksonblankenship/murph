@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { UserProfileService } from '../../user-profile';
 import type {
   ContextEnricher,
   EnrichmentRequest,
@@ -9,12 +10,16 @@ import type {
  * Enriches context with current time information.
  *
  * Adds the current date and time so the LLM has temporal awareness
- * without needing to call a tool.
+ * without needing to call a tool. Uses the user's configured timezone
+ * if available, otherwise falls back to UTC.
  */
 @Injectable()
 export class TimeEnricher implements ContextEnricher {
-  async enrich(_request: EnrichmentRequest): Promise<EnrichmentResult> {
+  constructor(private readonly userProfileService: UserProfileService) {}
+
+  async enrich(request: EnrichmentRequest): Promise<EnrichmentResult> {
     const now = new Date();
+    const timezone = await this.userProfileService.getTimezone(request.userId);
 
     const formattedTime = now.toLocaleString('en-US', {
       weekday: 'long',
@@ -23,6 +28,7 @@ export class TimeEnricher implements ContextEnricher {
       day: 'numeric',
       hour: 'numeric',
       minute: '2-digit',
+      timeZone: timezone ?? 'UTC',
       timeZoneName: 'short',
     });
 

@@ -1,5 +1,19 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { PinoLogger } from 'nestjs-pino';
+
+/** Maximum characters for content preview */
+const PREVIEW_MAX_CHARS = 200;
+/** Minimum position for word boundary truncation in preview */
+const PREVIEW_MIN_WORD_BOUNDARY = 150;
+/** Average characters per token for English text (approximation) */
+const CHARS_PER_TOKEN = 4;
+/** Tokens to words ratio for overlap extraction (1 token ≈ 0.75 words) */
+const TOKENS_TO_WORDS_RATIO = 0.75;
+/** Padding length for content hash */
+const HASH_PAD_LENGTH = 8;
+/** Hexadecimal radix for hash conversion */
+const HEX_RADIX = 16;
 
 export interface Chunk {
   content: string;
@@ -23,11 +37,14 @@ interface MarkdownBlock {
 
 @Injectable()
 export class ChunkingService {
-  private readonly logger = new Logger(ChunkingService.name);
   private readonly defaultMaxTokens: number;
   private readonly defaultOverlapTokens: number;
 
-  constructor(private configService: ConfigService) {
+  constructor(
+    private readonly logger: PinoLogger,
+    private configService: ConfigService,
+  ) {
+    this.logger.setContext(ChunkingService.name);
     this.defaultMaxTokens = this.configService.get<number>('vector.chunkSize');
     this.defaultOverlapTokens = this.configService.get<number>(
       'vector.chunkOverlap',
@@ -332,8 +349,7 @@ export class ChunkingService {
     if (overlapTokens <= 0) return '';
 
     const words = content.trim().split(/\s+/);
-    // Approximate: 1 token ≈ 0.75 words for English
-    const wordCount = Math.ceil(overlapTokens * 0.75);
+    const wordCount = Math.ceil(overlapTokens * TOKENS_TO_WORDS_RATIO);
     const overlapWords = words.slice(-wordCount);
 
     return overlapWords.join(' ');
@@ -349,15 +365,15 @@ export class ChunkingService {
       .replace(/\s+/g, ' ') // Normalize whitespace
       .trim();
 
-    if (cleaned.length <= 200) {
+    if (cleaned.length <= PREVIEW_MAX_CHARS) {
       return cleaned;
     }
 
     // Try to break at word boundary
-    const truncated = cleaned.substring(0, 200);
+    const truncated = cleaned.substring(0, PREVIEW_MAX_CHARS);
     const lastSpace = truncated.lastIndexOf(' ');
 
-    if (lastSpace > 150) {
+    if (lastSpace > PREVIEW_MIN_WORD_BOUNDARY) {
       return `${truncated.substring(0, lastSpace)}...`;
     }
 
@@ -368,7 +384,7 @@ export class ChunkingService {
    * Estimate token count (approximation: ~4 chars per token for English)
    */
   estimateTokens(text: string): number {
-    return Math.ceil(text.length / 4);
+    return Math.ceil(text.length / CHARS_PER_TOKEN);
   }
 
   /**
@@ -381,6 +397,6 @@ export class ChunkingService {
       hash = (hash << 5) - hash + char;
       hash = hash & hash;
     }
-    return Math.abs(hash).toString(16).padStart(8, '0');
+    return Math.abs(hash).toString(HEX_RADIX).padStart(HASH_PAD_LENGTH, '0');
   }
 }

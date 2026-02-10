@@ -4,15 +4,32 @@ import {
   Processor,
   WorkerHost,
 } from '@nestjs/bullmq';
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Interval } from '@nestjs/schedule';
 import { Job, Queue } from 'bullmq';
+import matter from 'gray-matter';
 import { MurLock } from 'murlock';
+import { PinoLogger } from 'nestjs-pino';
 import { ObsidianService } from '../obsidian/obsidian.service';
 import { ChunkingService } from '../vector/chunking.service';
 import { EmbeddingService } from '../vector/embedding.service';
-import { type ChunkUpsertData, QdrantService } from '../vector/qdrant.service';
+import {
+  type ChunkUpsertData,
+  QdrantService,
+  type SummaryUpsertData,
+} from '../vector/qdrant.service';
+
+/** Sync interval in milliseconds (5 minutes) */
+const SYNC_INTERVAL_MS = 300_000;
+/** Milliseconds per second for logging conversion */
+const MS_PER_SECOND = 1000;
+/** Lock timeout in milliseconds for single note indexing */
+const LOCK_TIMEOUT_MS = 30_000;
+/** Hexadecimal radix for hash conversion */
+const HEX_RADIX = 16;
+/** Padding for hash byte conversion */
+const BYTE_PAD_LENGTH = 2;
 
 interface IndexSyncJob {
   type: 'full-sync' | 'single-note';
@@ -23,10 +40,10 @@ interface IndexSyncJob {
 @Processor('index-sync')
 @Injectable()
 export class IndexSyncProcessor extends WorkerHost implements OnModuleInit {
-  private readonly logger = new Logger(IndexSyncProcessor.name);
   private readonly syncIntervalMs: number;
 
   constructor(
+    private readonly logger: PinoLogger,
     @InjectQueue('index-sync')
     private readonly syncQueue: Queue<IndexSyncJob>,
     private readonly obsidianService: ObsidianService,
@@ -36,6 +53,7 @@ export class IndexSyncProcessor extends WorkerHost implements OnModuleInit {
     private readonly configService: ConfigService,
   ) {
     super();
+    this.logger.setContext(IndexSyncProcessor.name);
     this.syncIntervalMs = this.configService.get<number>(
       'vector.syncIntervalMs',
     );
@@ -44,19 +62,20 @@ export class IndexSyncProcessor extends WorkerHost implements OnModuleInit {
   async onModuleInit() {
     // Run initial sync immediately
     await this.queueFullSync();
-    this.logger.log(
-      `Index sync scheduled every ${this.syncIntervalMs / 1000}s via @Interval`,
+    this.logger.info(
+      { intervalSeconds: this.syncIntervalMs / MS_PER_SECOND },
+      'Index sync scheduled via @Interval',
     );
   }
 
-  @Interval(300000) // 5 minutes - matches default VECTOR_SYNC_INTERVAL_MS
+  @Interval(SYNC_INTERVAL_MS)
   async scheduledFullSync(): Promise<void> {
     await this.queueFullSync();
   }
 
   async queueFullSync(): Promise<void> {
     await this.syncQueue.add('full-sync', { type: 'full-sync' });
-    this.logger.log('Queued full index sync');
+    this.logger.info({}, 'Queued full index sync');
   }
 
   async queueSingleNote(path: string, content: string): Promise<void> {
@@ -78,7 +97,7 @@ export class IndexSyncProcessor extends WorkerHost implements OnModuleInit {
   }
 
   private async performFullSync(): Promise<void> {
-    this.logger.log('Starting full index sync...');
+    this.logger.info({}, 'Starting full index sync...');
 
     try {
       // 1. Get all notes from Obsidian
@@ -131,23 +150,24 @@ export class IndexSyncProcessor extends WorkerHost implements OnModuleInit {
         }
       }
 
-      this.logger.log(
-        `Index sync complete: ${created} created, ${updated} updated, ${deleted} deleted (${totalChunks} total chunks)`,
+      this.logger.info(
+        { created, updated, deleted, totalChunks },
+        'Index sync complete',
       );
     } catch (error) {
-      this.logger.error('Error during full sync:', error.message);
+      this.logger.error({ err: error }, 'Error during full sync');
       throw error;
     }
   }
 
-  @MurLock(30000, 'path')
+  @MurLock(LOCK_TIMEOUT_MS, 'path')
   private async indexSingleNote(path: string, content?: string): Promise<void> {
     try {
       const noteContent =
         content || (await this.obsidianService.readNote(path))?.content;
 
       if (!noteContent) {
-        this.logger.warn(`Note ${path} not found or empty, skipping index`);
+        this.logger.warn({ path }, 'Note not found or empty, skipping index');
         return;
       }
 
@@ -156,15 +176,17 @@ export class IndexSyncProcessor extends WorkerHost implements OnModuleInit {
 
       // Index with chunking
       const chunkCount = await this.indexNoteWithChunks(path, noteContent);
-      this.logger.debug(`Indexed single note: ${path} (${chunkCount} chunks)`);
+      this.logger.debug({ path, chunkCount }, 'Indexed single note');
     } catch (error) {
-      this.logger.error(`Error indexing note ${path}:`, error.message);
+      this.logger.error({ err: error, path }, 'Error indexing note');
       throw error;
     }
   }
 
   /**
-   * Index a note by chunking it and batch embedding
+   * Index a note by chunking it and batch embedding.
+   * Uses a two-tier strategy: summary embedding for search/dedup (document-level)
+   * and chunk embeddings for context retrieval.
    */
   private async indexNoteWithChunks(
     path: string,
@@ -174,7 +196,7 @@ export class IndexSyncProcessor extends WorkerHost implements OnModuleInit {
     const chunks = this.chunkingService.chunkMarkdown(content);
 
     if (chunks.length === 0) {
-      this.logger.debug(`Skipping empty note: ${path}`);
+      this.logger.debug({ path }, 'Skipping empty note');
       return 0;
     }
 
@@ -182,6 +204,7 @@ export class IndexSyncProcessor extends WorkerHost implements OnModuleInit {
     const title = this.extractTitle(path, content);
     const tags = this.extractTags(content);
     const documentHash = await this.hashContent(content);
+    const summary = this.extractSummary(content);
 
     // Batch embed all chunks
     const chunkContents = chunks.map(c => c.content);
@@ -198,10 +221,39 @@ export class IndexSyncProcessor extends WorkerHost implements OnModuleInit {
       tags,
     }));
 
-    // Batch upsert to Qdrant
+    // Batch upsert chunks to Qdrant
     await this.qdrantService.upsertChunks(chunkData);
 
+    // If summary is non-empty, create a summary-level embedding for search/dedup
+    if (summary) {
+      const summaryEmbedding = await this.embeddingService.embed(summary);
+      const summaryData: SummaryUpsertData = {
+        embedding: summaryEmbedding,
+        path,
+        documentHash,
+        title,
+        tags,
+        summary,
+      };
+      await this.qdrantService.upsertSummary(summaryData);
+    }
+
     return chunks.length;
+  }
+
+  /**
+   * Extracts the summary field from frontmatter.
+   *
+   * @param content - Full markdown content with frontmatter
+   * @returns Summary string, or empty string if not present
+   */
+  private extractSummary(content: string): string {
+    try {
+      const parsed = matter(content);
+      return (parsed.data.summary as string) || '';
+    } catch {
+      return '';
+    }
   }
 
   private extractTitle(path: string, content: string): string {
@@ -250,16 +302,18 @@ export class IndexSyncProcessor extends WorkerHost implements OnModuleInit {
     const data = encoder.encode(content);
     const hashBuffer = await crypto.subtle.digest('SHA-256', data);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    return hashArray
+      .map(b => b.toString(HEX_RADIX).padStart(BYTE_PAD_LENGTH, '0'))
+      .join('');
   }
 
   @OnWorkerEvent('completed')
   onCompleted(job: Job) {
-    this.logger.debug(`Index sync job ${job.id} completed`);
+    this.logger.debug({ jobId: job.id }, 'Index sync job completed');
   }
 
   @OnWorkerEvent('failed')
   onFailed(job: Job, error: Error) {
-    this.logger.error(`Index sync job ${job.id} failed:`, error.message);
+    this.logger.error({ err: error, jobId: job.id }, 'Index sync job failed');
   }
 }

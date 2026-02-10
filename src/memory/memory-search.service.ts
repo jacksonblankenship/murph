@@ -1,5 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { PinoLogger } from 'nestjs-pino';
 import { EmbeddingService } from '../vector/embedding.service';
 import { QdrantService } from '../vector/qdrant.service';
 
@@ -15,16 +16,17 @@ export interface MemorySearchResult {
 
 @Injectable()
 export class MemorySearchService {
-  private readonly logger = new Logger(MemorySearchService.name);
   private readonly autoInjectThreshold: number;
   private readonly searchLimit: number;
   private readonly maxAutoInjectChunks = 2;
 
   constructor(
+    private readonly logger: PinoLogger,
     private readonly embeddingService: EmbeddingService,
     private readonly qdrantService: QdrantService,
     private readonly configService: ConfigService,
   ) {
+    this.logger.setContext(MemorySearchService.name);
     this.autoInjectThreshold = this.configService.get<number>(
       'vector.autoInjectThreshold',
     );
@@ -69,7 +71,7 @@ export class MemorySearchService {
 
       return contextParts.join('\n\n---\n\n');
     } catch (error) {
-      this.logger.warn('Failed to recall memory context:', error.message);
+      this.logger.warn({ err: error }, 'Failed to recall memory context');
       return null;
     }
   }
@@ -86,7 +88,7 @@ export class MemorySearchService {
       const embedding = await this.embeddingService.embed(query);
       return await this.qdrantService.searchSimilarChunks(embedding, limit);
     } catch (error) {
-      this.logger.warn('Failed to search memories:', error.message);
+      this.logger.warn({ err: error }, 'Failed to search memories');
       return [];
     }
   }
