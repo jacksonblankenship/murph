@@ -6,8 +6,8 @@ import { QueuedScheduledMessage } from './message.schemas';
 /**
  * Service for accessing message queues.
  *
- * User messages are now processed via in-memory MessageOrchestrator.
- * Scheduled messages still use BullMQ for persistence.
+ * User messages are processed via InboundProcessor (BullMQ inbound-messages queue).
+ * Scheduled messages use BullMQ for persistence.
  */
 @Injectable()
 export class MessagesService {

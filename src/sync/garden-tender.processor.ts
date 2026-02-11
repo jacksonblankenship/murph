@@ -15,8 +15,8 @@ import { PinoLogger } from 'nestjs-pino';
 import { z } from 'zod';
 import { sanitizePath } from '../ai/tools/garden/utils';
 import { formatObsidianDate } from '../common/obsidian-date';
-import { ObsidianService } from '../obsidian/obsidian.service';
 import { PromptService } from '../prompts';
+import { VaultService } from '../vault';
 import { EmbeddingService } from '../vector/embedding.service';
 import { QdrantService } from '../vector/qdrant.service';
 import { IndexSyncProcessor } from './index-sync.processor';
@@ -89,7 +89,7 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
     private readonly logger: PinoLogger,
     @InjectQueue('garden-tending')
     private readonly tendingQueue: Queue<GardenTendingJob>,
-    private readonly obsidianService: ObsidianService,
+    private readonly vaultService: VaultService,
     private readonly embeddingService: EmbeddingService,
     private readonly qdrantService: QdrantService,
     private readonly indexSyncProcessor: IndexSyncProcessor,
@@ -165,7 +165,7 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
     this.logger.info({}, 'Starting garden tending session...');
 
     try {
-      const candidates = await this.findCandidatesForTending();
+      const candidates = this.findCandidatesForTending();
 
       if (candidates.length === 0) {
         this.logger.info({}, 'No files need tending');
@@ -178,7 +178,7 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
       );
 
       // Build full garden context for linking decisions
-      const garden = await this.buildGardenMetadata();
+      const garden = this.buildGardenMetadata();
       const brokenLinks = this.findBrokenLinks(garden);
 
       // Process each candidate individually
@@ -197,21 +197,14 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
    * Finds notes that need tending: files modified since last tended,
    * or files that have never been tended.
    */
-  private async findCandidatesForTending(): Promise<TendingCandidate[]> {
-    const notes = await this.obsidianService.getAllNotesWithContent();
+  private findCandidatesForTending(): TendingCandidate[] {
+    const notes = this.vaultService.getAllNotes();
     const candidates: TendingCandidate[] = [];
 
     for (const note of notes) {
-      const parsed = matter(note.content);
-      const lastTendedStr = parsed.data.last_tended as string | undefined;
+      const lastTendedStr = note.frontmatter.last_tended as string | undefined;
       const lastTended = lastTendedStr ? new Date(lastTendedStr) : null;
-      const lastModified = await this.obsidianService.getModifiedDate(
-        note.path,
-      );
-
-      if (!lastModified) {
-        continue;
-      }
+      const lastModified = note.stat.mtime;
 
       // Add tolerance to account for the time between capturing
       // the timestamp and writing the file (which updates mtime)
@@ -224,7 +217,7 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
       if (!lastTended || lastModified.getTime() > lastTendedWithTolerance) {
         candidates.push({
           path: note.path,
-          content: note.content,
+          content: note.raw,
           lastModified,
           lastTended,
         });
@@ -234,42 +227,26 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
     return candidates;
   }
 
-  private async buildGardenMetadata(): Promise<NoteMetadata[]> {
-    const notes = await this.obsidianService.getAllNotesWithContent();
+  /**
+   * Builds metadata for all notes using pre-computed indexes from VaultService.
+   */
+  private buildGardenMetadata(): NoteMetadata[] {
+    const notes = this.vaultService.getAllNotes();
     const metadata: NoteMetadata[] = [];
 
-    // First pass: extract all note data
     for (const note of notes) {
-      const parsed = matter(note.content);
-      const outboundLinks = this.extractWikilinks(parsed.content);
+      const outboundLinks = [...note.outboundLinks];
+      const inboundLinks = this.vaultService.getBacklinks(note.path);
 
       metadata.push({
         path: note.path,
-        content: parsed.content,
-        growthStage: parsed.data.growth_stage as string | undefined,
-        lastTended: parsed.data.last_tended as string | undefined,
+        content: note.body,
+        growthStage: note.frontmatter.growth_stage as string | undefined,
+        lastTended: note.frontmatter.last_tended as string | undefined,
         outboundLinks,
-        inboundLinks: [], // Populated in second pass
-        isMocCandidate: false, // Updated in third pass
+        inboundLinks,
+        isMocCandidate: inboundLinks.length >= MOC_CANDIDATE_MIN_LINKS,
       });
-    }
-
-    // Second pass: calculate inbound links
-    for (const note of metadata) {
-      for (const outbound of note.outboundLinks) {
-        // Find the target note and add this as an inbound link
-        const target = metadata.find(
-          m => m.path.replace(/\.md$/, '') === outbound,
-        );
-        if (target) {
-          target.inboundLinks.push(note.path.replace(/\.md$/, ''));
-        }
-      }
-    }
-
-    // Third pass: identify MOC candidates
-    for (const note of metadata) {
-      note.isMocCandidate = note.inboundLinks.length >= MOC_CANDIDATE_MIN_LINKS;
     }
 
     return metadata;
@@ -295,19 +272,6 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
       }
     }
     return brokenLinks;
-  }
-
-  private extractWikilinks(content: string): string[] {
-    const wikilinkRegex = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
-    const links: string[] = [];
-    let match = wikilinkRegex.exec(content);
-
-    while (match !== null) {
-      links.push(match[1]);
-      match = wikilinkRegex.exec(content);
-    }
-
-    return [...new Set(links)];
   }
 
   /**
@@ -420,13 +384,14 @@ export class GardenTenderProcessor extends WorkerHost implements OnModuleInit {
     garden: NoteMetadata[],
     brokenLinks: BrokenLink[],
   ): Promise<string> {
-    const parsed = matter(candidate.content);
+    const note = this.vaultService.getNote(candidate.path);
     const noteMetadata = garden.find(n => n.path === candidate.path);
 
     // Find similar notes for deduplication context
     let similarNotesSection = '';
     try {
-      const embedding = await this.embeddingService.embed(parsed.content);
+      const bodyContent = note?.body || '';
+      const embedding = await this.embeddingService.embed(bodyContent);
       const similarNotes = await this.qdrantService.searchSimilar(
         embedding,
         SIMILAR_NOTES_LIMIT,
@@ -456,7 +421,7 @@ ${filtered.map(s => `- ${s.path} (${(s.score * PERCENT_MULTIPLIER).toFixed(0)}% 
 
 ## Current Content
 \`\`\`markdown
-${parsed.content}
+${note?.body || ''}
 \`\`\`
 
 ## Metadata
@@ -521,11 +486,11 @@ ${existingNotes}
         }),
         execute: async ({ path }) => {
           try {
-            const note = await this.obsidianService.readNote(path);
+            const note = this.vaultService.getNote(path);
             if (!note) {
               return `Note not found: ${path}`;
             }
-            return note.content;
+            return note.raw;
           } catch (error) {
             return `Error reading note: ${error.message}`;
           }
@@ -546,18 +511,17 @@ ${existingNotes}
         }),
         execute: async ({ path, newContent, reason }) => {
           try {
-            const note = await this.obsidianService.readNote(path);
+            const note = this.vaultService.getNote(path);
             if (!note) {
               return `Note not found: ${path}`;
             }
 
-            const parsed = matter(note.content);
             const updatedContent = matter.stringify(
               this.unescapeContent(newContent),
-              this.normalizeFrontmatter(parsed.data, tendedAt),
+              this.normalizeFrontmatter(note.frontmatter, tendedAt),
             );
 
-            await this.obsidianService.writeNote(
+            await this.vaultService.writeNote(
               path.replace(/\.md$/, ''),
               updatedContent,
             );
@@ -588,8 +552,8 @@ ${existingNotes}
         }),
         execute: async ({ sourcePath, targetPath, mergedContent, reason }) => {
           try {
-            const sourceNote = await this.obsidianService.readNote(sourcePath);
-            const targetNote = await this.obsidianService.readNote(targetPath);
+            const sourceNote = this.vaultService.getNote(sourcePath);
+            const targetNote = this.vaultService.getNote(targetPath);
 
             if (!sourceNote) {
               return `Source note not found: ${sourcePath}`;
@@ -598,15 +562,13 @@ ${existingNotes}
               return `Target note not found: ${targetPath}`;
             }
 
-            const targetParsed = matter(targetNote.content);
-
             // Write merged content
             const newContent = matter.stringify(
               this.unescapeContent(mergedContent),
-              this.normalizeFrontmatter(targetParsed.data, tendedAt),
+              this.normalizeFrontmatter(targetNote.frontmatter, tendedAt),
             );
 
-            await this.obsidianService.writeNote(
+            await this.vaultService.writeNote(
               targetPath.replace(/\.md$/, ''),
               newContent,
             );
@@ -616,7 +578,7 @@ ${existingNotes}
             );
 
             // Delete source
-            await this.obsidianService.deleteNote(sourcePath);
+            await this.vaultService.deleteNote(sourcePath);
             await this.qdrantService.deleteNote(sourcePath);
 
             // Update any notes linking to source -> target
@@ -681,7 +643,7 @@ ${existingNotes}
                 this.normalizeFrontmatter({}, tendedAt),
               );
 
-              await this.obsidianService.writeNote(path, content);
+              await this.vaultService.writeNote(path, content);
               await this.indexSyncProcessor.queueSingleNote(
                 `${path}.md`,
                 content,
@@ -691,18 +653,16 @@ ${existingNotes}
 
             // Handle original
             if (deleteOriginal) {
-              await this.obsidianService.deleteNote(originalPath);
+              await this.vaultService.deleteNote(originalPath);
               await this.qdrantService.deleteNote(originalPath);
             } else if (updatedOriginal) {
-              const original =
-                await this.obsidianService.readNote(originalPath);
+              const original = this.vaultService.getNote(originalPath);
               if (original) {
-                const parsed = matter(original.content);
                 const newContent = matter.stringify(
                   this.unescapeContent(updatedOriginal),
-                  this.normalizeFrontmatter(parsed.data, tendedAt),
+                  this.normalizeFrontmatter(original.frontmatter, tendedAt),
                 );
-                await this.obsidianService.writeNote(
+                await this.vaultService.writeNote(
                   originalPath.replace(/\.md$/, ''),
                   newContent,
                 );
@@ -745,7 +705,7 @@ ${existingNotes}
               this.normalizeFrontmatter({}, tendedAt),
             );
 
-            await this.obsidianService.writeNote(path, noteContent);
+            await this.vaultService.writeNote(path, noteContent);
             await this.indexSyncProcessor.queueSingleNote(
               `${path}.md`,
               noteContent,
@@ -768,7 +728,7 @@ ${existingNotes}
         }),
         execute: async ({ path, reason }) => {
           try {
-            await this.obsidianService.deleteNote(path);
+            await this.vaultService.deleteNote(path);
             await this.qdrantService.deleteNote(path);
 
             this.logger.info({ path, reason }, 'Deleted note');
@@ -791,21 +751,20 @@ ${existingNotes}
         }),
         execute: async ({ path, newMaturity, reason }) => {
           try {
-            const note = await this.obsidianService.readNote(path);
+            const note = this.vaultService.getNote(path);
             if (!note) {
               return `Note not found: ${path}`;
             }
 
-            const parsed = matter(note.content);
             const newContent = matter.stringify(
-              parsed.content,
+              note.body,
               this.normalizeFrontmatter(
-                { ...parsed.data, growth_stage: newMaturity },
+                { ...note.frontmatter, growth_stage: newMaturity },
                 tendedAt,
               ),
             );
 
-            await this.obsidianService.writeNote(
+            await this.vaultService.writeNote(
               path.replace(/\.md$/, ''),
               newContent,
             );
@@ -881,13 +840,12 @@ ${existingNotes}
         }),
         execute: async ({ oldPath, newTitle, newContent, reason, folder }) => {
           try {
-            const oldNote = await this.obsidianService.readNote(oldPath);
+            const oldNote = this.vaultService.getNote(oldPath);
             if (!oldNote) {
               return `Note not found: ${oldPath}`;
             }
 
             const today = formatObsidianDate();
-            const parsed = matter(oldNote.content);
 
             const sanitizedTitle = sanitizePath(newTitle);
             const oldFolder = oldPath.includes('/')
@@ -898,7 +856,7 @@ ${existingNotes}
               ? `${targetFolder}/${sanitizedTitle}`
               : sanitizedTitle;
 
-            const existingNew = await this.obsidianService.readNote(newPath);
+            const existingNew = this.vaultService.getNote(newPath);
             if (existingNew) {
               return `Note already exists at "${newPath}". Choose a different title.`;
             }
@@ -914,7 +872,7 @@ ${existingNotes}
               tags: [],
             });
 
-            await this.obsidianService.writeNote(newPath, newNoteContent);
+            await this.vaultService.writeNote(newPath, newNoteContent);
             await this.indexSyncProcessor.queueSingleNote(
               newPath,
               newNoteContent,
@@ -926,11 +884,11 @@ ${existingNotes}
               : `> **Superseded:** This note has been superseded by [[${sanitizedTitle}]].\n\n`;
 
             const updatedOldContent = matter.stringify(
-              supersessionNotice + parsed.content.trim(),
-              this.normalizeFrontmatter(parsed.data, tendedAt),
+              supersessionNotice + oldNote.body.trim(),
+              this.normalizeFrontmatter(oldNote.frontmatter, tendedAt),
             );
 
-            await this.obsidianService.writeNote(oldPath, updatedOldContent);
+            await this.vaultService.writeNote(oldPath, updatedOldContent);
             await this.indexSyncProcessor.queueSingleNote(
               oldPath,
               updatedOldContent,
@@ -1088,20 +1046,21 @@ ${existingNotes}
         execute: async ({ path }) => {
           try {
             const normalizedPath = path.replace(/\.md$/, '');
-            const pathName = normalizedPath.split('/').pop();
+            const backlinkPaths = this.vaultService.getBacklinks(path);
 
-            const notes = await this.obsidianService.getAllNotesWithContent();
+            if (backlinkPaths.length === 0) {
+              return `No notes link to "${normalizedPath}".`;
+            }
+
+            const pathName = normalizedPath.split('/').pop();
             const wikilinkRegex = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
             const backlinks: { path: string; context: string }[] = [];
 
-            for (const note of notes) {
-              if (note.path.replace(/\.md$/, '') === normalizedPath) {
-                continue;
-              }
+            for (const blPath of backlinkPaths) {
+              const note = this.vaultService.getNote(blPath);
+              if (!note) continue;
 
-              const parsed = matter(note.content);
-              const lines = parsed.content.split('\n');
-
+              const lines = note.body.split('\n');
               for (const line of lines) {
                 let match = wikilinkRegex.exec(line);
                 while (match !== null) {
@@ -1112,7 +1071,7 @@ ${existingNotes}
                     linkTarget.endsWith(`/${pathName}`)
                   ) {
                     backlinks.push({
-                      path: note.path.replace(/\.md$/, ''),
+                      path: blPath,
                       context: line.trim(),
                     });
                     break;
@@ -1157,31 +1116,31 @@ ${existingNotes}
     }
 
     // Find notes that link to the deleted note
-    for (const note of garden) {
-      if (note.outboundLinks.includes(deletedName)) {
+    for (const noteMeta of garden) {
+      if (noteMeta.outboundLinks.includes(deletedName)) {
         try {
-          const noteContent = await this.obsidianService.readNote(note.path);
-          if (!noteContent) continue;
+          const note = this.vaultService.getNote(noteMeta.path);
+          if (!note) continue;
 
           // Replace [[deletedName]] with [[newName]]
-          const updatedContent = noteContent.content.replace(
+          const updatedContent = note.raw.replace(
             new RegExp(`\\[\\[${deletedName}(\\|[^\\]]+)?\\]\\]`, 'g'),
             `[[${newName}$1]]`,
           );
 
-          if (updatedContent !== noteContent.content) {
-            await this.obsidianService.writeNote(
-              note.path.replace(/\.md$/, ''),
+          if (updatedContent !== note.raw) {
+            await this.vaultService.writeNote(
+              noteMeta.path.replace(/\.md$/, ''),
               updatedContent,
             );
             this.logger.info(
-              { notePath: note.path, from: deletedName, to: newName },
+              { notePath: noteMeta.path, from: deletedName, to: newName },
               'Updated links in note',
             );
           }
         } catch (error) {
           this.logger.warn(
-            { err: error, notePath: note.path },
+            { err: error, notePath: noteMeta.path },
             'Failed to update links in note',
           );
         }
@@ -1198,21 +1157,17 @@ ${existingNotes}
    */
   private async markAsTended(path: string, tendedAt: string): Promise<void> {
     try {
-      const note = await this.obsidianService.readNote(path);
+      const note = this.vaultService.getNote(path);
       if (!note) {
         return;
       }
 
-      const parsed = matter(note.content);
       const newContent = matter.stringify(
-        parsed.content,
-        this.normalizeFrontmatter(parsed.data, tendedAt),
+        note.body,
+        this.normalizeFrontmatter(note.frontmatter, tendedAt),
       );
 
-      await this.obsidianService.writeNote(
-        path.replace(/\.md$/, ''),
-        newContent,
-      );
+      await this.vaultService.writeNote(path.replace(/\.md$/, ''), newContent);
       // Don't re-index - we only changed metadata
     } catch (error) {
       this.logger.warn({ err: error, path }, 'Failed to mark note as tended');

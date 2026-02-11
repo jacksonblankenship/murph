@@ -10,6 +10,7 @@ describe('TaskProcessor', () => {
   let processor: TaskProcessor;
   let mockRedis: ReturnType<typeof createMockRedis>;
   let mockEventEmitter: { emit: ReturnType<typeof mock> };
+  let mockDispatcher: { dispatch: ReturnType<typeof mock> };
 
   function createMockJob(task: ScheduledTask): Job<ScheduledTask> {
     return {
@@ -23,6 +24,9 @@ describe('TaskProcessor', () => {
     mockEventEmitter = {
       emit: mock(() => true),
     };
+    mockDispatcher = {
+      dispatch: mock(() => Promise.resolve('dispatched-job-id')),
+    };
 
     const mockRedisService = {
       getClient: () => mockRedis,
@@ -32,11 +36,12 @@ describe('TaskProcessor', () => {
       createMockLogger(),
       mockRedisService as never,
       mockEventEmitter as never,
+      mockDispatcher as never,
     );
   });
 
   describe('process', () => {
-    test('emits SCHEDULED_TASK_TRIGGERED event', async () => {
+    test('dispatches to scheduled-messages queue', async () => {
       const task: ScheduledTask = {
         id: 'task-1',
         userId: 1,
@@ -50,15 +55,25 @@ describe('TaskProcessor', () => {
 
       await processor.process(createMockJob(task));
 
-      expect(mockEventEmitter.emit).toHaveBeenCalledTimes(1);
-      expect(mockEventEmitter.emit).toHaveBeenCalledWith(
-        Events.SCHEDULED_TASK_TRIGGERED,
-        {
-          userId: task.userId,
-          taskId: task.id,
-          message: task.message,
-        },
-      );
+      expect(mockDispatcher.dispatch).toHaveBeenCalledTimes(1);
+
+      const call = mockDispatcher.dispatch.mock.calls[0][0] as {
+        queue: string;
+        jobName: string;
+        data: {
+          userId: number;
+          content: string;
+          taskId: string;
+          timestamp: number;
+        };
+        jobOptions: { jobId: string };
+      };
+      expect(call.queue).toBe('scheduled-messages');
+      expect(call.jobName).toBe('process-scheduled-message');
+      expect(call.data.userId).toBe(task.userId);
+      expect(call.data.content).toBe(task.message);
+      expect(call.data.taskId).toBe(task.id);
+      expect(call.jobOptions.jobId).toStartWith(`scheduled-${task.id}-`);
     });
 
     test('throws error for empty message', async () => {
@@ -215,25 +230,30 @@ describe('TaskProcessor', () => {
         enabled: true,
       };
 
-      // Make emit throw on first call (SCHEDULED_TASK_TRIGGERED) to simulate failure
-      let callCount = 0;
-      mockEventEmitter.emit = mock(() => {
-        callCount++;
-        if (callCount === 1) {
-          throw new Error('Something went wrong');
-        }
-        return true;
+      // Make dispatcher throw to simulate failure
+      mockDispatcher.dispatch = mock(() => {
+        throw new Error('Something went wrong');
       });
+
+      processor = new TaskProcessor(
+        createMockLogger(),
+        { getClient: () => mockRedis } as never,
+        mockEventEmitter as never,
+        mockDispatcher as never,
+      );
 
       await expect(processor.process(createMockJob(task))).rejects.toThrow();
 
-      // Second emit should be the error notification
-      expect(mockEventEmitter.emit).toHaveBeenCalledTimes(2);
-      const secondCall = mockEventEmitter.emit.mock.calls[1];
-      expect(secondCall[0]).toBe(Events.MESSAGE_BROADCAST);
-      expect(secondCall[1].userId).toBe(42);
-      expect(secondCall[1].content).toContain('Scheduled Task Failed');
-      expect(secondCall[1].content).toContain('task-1');
+      // Should emit error notification
+      expect(mockEventEmitter.emit).toHaveBeenCalledTimes(1);
+      const [eventName, eventData] = mockEventEmitter.emit.mock.calls[0] as [
+        string,
+        { userId: number; content: string },
+      ];
+      expect(eventName).toBe(Events.MESSAGE_BROADCAST);
+      expect(eventData.userId).toBe(42);
+      expect(eventData.content).toContain('Scheduled Task Failed');
+      expect(eventData.content).toContain('task-1');
     });
   });
 });

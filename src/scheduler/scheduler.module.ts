@@ -12,7 +12,7 @@ import { TaskProcessor } from './task.processor';
  * Handles task scheduling with BullMQ.
  *
  * Communication with other modules via EventEmitter:
- * - Emits SCHEDULED_TASK_TRIGGERED when a task fires
+ * - Dispatches to 'scheduled-messages' queue via AgentDispatcher
  * - Emits MESSAGE_BROADCAST for error notifications
  */
 @Module({

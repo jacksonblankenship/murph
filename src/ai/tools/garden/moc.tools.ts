@@ -16,7 +16,7 @@ import { sanitizePath } from './utils';
  * Includes: moc_candidates, create_moc
  */
 export function createMocTools(deps: GardenToolsDependencies) {
-  const { obsidianService, indexSyncProcessor } = deps;
+  const { vaultService, indexSyncProcessor } = deps;
 
   return {
     moc_candidates: tool({
@@ -39,57 +39,31 @@ export function createMocTools(deps: GardenToolsDependencies) {
         limit = ORPHAN_LIMIT,
       }) => {
         try {
-          const notes = await obsidianService.getAllNotesWithContent();
+          const notes = vaultService.getAllNotes();
           if (notes.length === 0) {
             return 'No notes in garden.';
           }
 
-          // Build inbound link counts
-          const wikilinkRegex = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
-          const inboundLinks = new Map<string, string[]>();
-          const validPaths = new Set<string>();
-
-          // Initialize
-          for (const note of notes) {
-            const normalizedPath = note.path.replace(/\.md$/, '');
-            validPaths.add(normalizedPath);
-            inboundLinks.set(normalizedPath, []);
-          }
-
-          // Count inbound links
-          for (const note of notes) {
-            const normalizedPath = note.path.replace(/\.md$/, '');
-            const parsed = matter(note.content);
-
-            let match = wikilinkRegex.exec(parsed.content);
-            while (match !== null) {
-              const linkTarget = match[1];
-              const targetPath = [...validPaths].find(
-                p => p === linkTarget || p.endsWith(`/${linkTarget}`),
-              );
-              if (targetPath) {
-                inboundLinks.get(targetPath)?.push(normalizedPath);
-              }
-              match = wikilinkRegex.exec(parsed.content);
-            }
-          }
-
-          // Find candidates (exclude existing MOCs by title)
+          // Find candidates using pre-computed backlinks
           const candidates: {
             path: string;
             inboundCount: number;
             topLinkers: string[];
           }[] = [];
-          for (const [path, linkers] of inboundLinks) {
+
+          for (const note of notes) {
+            const normalizedPath = note.path.replace(/\.md$/, '');
+
             // Skip notes whose title contains "MOC" (case-insensitive)
-            const title = path.split('/').pop() || '';
+            const title = normalizedPath.split('/').pop() || '';
             if (/\bmoc\b/i.test(title)) continue;
 
-            if (linkers.length >= minInboundLinks) {
+            const backlinks = vaultService.getBacklinks(note.path);
+            if (backlinks.length >= minInboundLinks) {
               candidates.push({
-                path,
-                inboundCount: linkers.length,
-                topLinkers: linkers.slice(0, TOP_LINKERS_PREVIEW),
+                path: normalizedPath,
+                inboundCount: backlinks.length,
+                topLinkers: backlinks.slice(0, TOP_LINKERS_PREVIEW),
               });
             }
           }
@@ -150,7 +124,7 @@ export function createMocTools(deps: GardenToolsDependencies) {
             : sanitizedTitle;
 
           // Check if already exists
-          const existing = await obsidianService.readNote(mocPath);
+          const existing = vaultService.getNote(mocPath);
           if (existing) {
             return `MOC already exists at "${mocPath}". Use update to modify it.`;
           }
@@ -177,7 +151,7 @@ export function createMocTools(deps: GardenToolsDependencies) {
             tags: [],
           });
 
-          await obsidianService.writeNote(mocPath, finalContent);
+          await vaultService.writeNote(mocPath, finalContent);
           await indexSyncProcessor.queueSingleNote(
             `${mocPath}.md`,
             finalContent,

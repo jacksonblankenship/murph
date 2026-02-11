@@ -122,9 +122,18 @@ export class ChannelOrchestratorService {
       response.messages,
     );
 
-    // 8. Run outputs pipeline (unless skipped)
+    // 8. Run outputs pipeline (unless skipped or empty response)
     let outputsSent = false;
-    if (!options.skipOutputs) {
+    const hasTextContent = response.text.trim().length > 0;
+
+    if (!hasTextContent) {
+      this.logger.warn(
+        { channelId, userId: request.userId },
+        'LLM produced no text content (tool-only response), skipping outputs',
+      );
+    }
+
+    if (!options.skipOutputs && hasTextContent) {
       const outputs = options.outputOverrides ?? channel.outputs;
       outputsSent = await this.runOutputs(
         outputs,

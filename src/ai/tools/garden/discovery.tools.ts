@@ -1,5 +1,4 @@
 import { tool } from 'ai';
-import matter from 'gray-matter';
 import { z } from 'zod';
 import {
   DEFAULT_SEARCH_LIMIT,
@@ -23,7 +22,7 @@ import type { GardenToolsDependencies } from './types';
  * Includes: search_similar, recall, wander, get_surrounding_chunks, traverse
  */
 export function createDiscoveryTools(deps: GardenToolsDependencies) {
-  const { obsidianService, embeddingService, qdrantService } = deps;
+  const { vaultService, embeddingService, qdrantService } = deps;
 
   return {
     search_similar: tool({
@@ -185,7 +184,7 @@ export function createDiscoveryTools(deps: GardenToolsDependencies) {
         limit = WANDER_LIMIT,
       }) => {
         try {
-          const notes = await obsidianService.getAllNotesWithContent();
+          const notes = vaultService.getAllNotes();
           if (notes.length === 0) {
             return 'No notes in garden to wander through.';
           }
@@ -198,14 +197,12 @@ export function createDiscoveryTools(deps: GardenToolsDependencies) {
           // Filter notes based on criteria
           const candidates: { path: string; content: string }[] = [];
           for (const note of notes) {
-            const parsed = matter(note.content);
-
             // Check growth stage filter
-            if (growth_stage && parsed.data.growth_stage !== growth_stage)
+            if (growth_stage && note.frontmatter.growth_stage !== growth_stage)
               continue;
 
             // Check recency filter
-            const lastTended = parsed.data.last_tended as string | undefined;
+            const lastTended = note.frontmatter.last_tended;
             if (lastTended) {
               const tendedDate = new Date(lastTended);
               if (tendedDate > cutoffDate) continue;
@@ -213,7 +210,7 @@ export function createDiscoveryTools(deps: GardenToolsDependencies) {
 
             candidates.push({
               path: note.path.replace(/\.md$/, ''),
-              content: parsed.content,
+              content: note.body,
             });
           }
 
@@ -313,42 +310,36 @@ export function createDiscoveryTools(deps: GardenToolsDependencies) {
           const clampedDepth = Math.min(Math.max(depth, 1), MAX_TRAVERSE_DEPTH);
           const normalizedFrom = from.replace(/\.md$/, '');
 
-          const startNote = await obsidianService.readNote(normalizedFrom);
+          const startNote = vaultService.getNote(normalizedFrom);
           if (!startNote) {
             return `Note not found: ${from}`;
           }
 
-          const notes = await obsidianService.getAllNotesWithContent();
-          const validPaths = new Set(
-            notes.map(n => n.path.replace(/\.md$/, '')),
-          );
-          const wikilinkRegex = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
-
-          // Build link maps
+          // Build link maps from in-memory vault
+          const allNotes = vaultService.getAllNotes();
           const outboundMap = new Map<string, string[]>();
           const inboundMap = new Map<string, string[]>();
+          const validPaths = new Set(
+            allNotes.map(n => n.path.replace(/\.md$/, '')),
+          );
 
-          for (const note of notes) {
-            const path = note.path.replace(/\.md$/, '');
-            const parsed = matter(note.content);
+          for (const note of allNotes) {
+            const notePath = note.path.replace(/\.md$/, '');
             const outbound: string[] = [];
 
-            let match = wikilinkRegex.exec(parsed.content);
-            while (match !== null) {
-              const linkTarget = match[1];
+            for (const linkTarget of note.outboundLinks) {
               const targetPath = [...validPaths].find(
                 p => p === linkTarget || p.endsWith(`/${linkTarget}`),
               );
-              if (targetPath && targetPath !== path) {
+              if (targetPath && targetPath !== notePath) {
                 outbound.push(targetPath);
                 if (!inboundMap.has(targetPath)) {
                   inboundMap.set(targetPath, []);
                 }
-                inboundMap.get(targetPath)?.push(path);
+                inboundMap.get(targetPath)?.push(notePath);
               }
-              match = wikilinkRegex.exec(parsed.content);
             }
-            outboundMap.set(path, outbound);
+            outboundMap.set(notePath, outbound);
           }
 
           // BFS traversal

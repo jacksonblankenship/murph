@@ -1,12 +1,13 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { AgentModule } from '../agents/agent.module';
 import { AiModule } from '../ai/ai.module';
 import { ExaModule } from '../exa/exa.module';
 import { MemoryModule } from '../memory/memory.module';
-import { ObsidianModule } from '../obsidian/obsidian.module';
 import { SchedulerModule } from '../scheduler/scheduler.module';
 import { SyncModule } from '../sync/sync.module';
 import { UserProfileModule } from '../user-profile';
+import { VaultModule } from '../vault';
 import { VectorModule } from '../vector/vector.module';
 import { ChannelRegistry } from './channel.registry';
 import { ChannelOrchestratorService } from './channel-orchestrator.service';
@@ -23,8 +24,9 @@ import { GardenTenderPreset } from './presets/garden-tender.preset';
 import { ScheduledPreset } from './presets/scheduled.preset';
 import { UserDirectPreset } from './presets/user-direct.preset';
 // Tool Factories
-import { CaptureToolFactory, GardenToolFactory } from './tools/garden.factory';
+import { GardenToolFactory } from './tools/garden.factory';
 import { SchedulingToolFactory } from './tools/scheduling.factory';
+import { SeedToolFactory } from './tools/seed.factory';
 import { TimeToolFactory } from './tools/time.factory';
 import { WebSearchToolFactory } from './tools/web-search.factory';
 // Transformers
@@ -43,10 +45,11 @@ import { ProactiveTransformer } from './transformers/proactive.transformer';
   imports: [
     ConfigModule,
     AiModule,
+    AgentModule,
     MemoryModule,
     ExaModule,
     SchedulerModule,
-    ObsidianModule,
+    VaultModule,
     UserProfileModule,
     VectorModule,
     SyncModule,
@@ -70,7 +73,7 @@ import { ProactiveTransformer } from './transformers/proactive.transformer';
     // Tool Factories
     TimeToolFactory,
     GardenToolFactory,
-    CaptureToolFactory,
+    SeedToolFactory,
     WebSearchToolFactory,
     SchedulingToolFactory,
 

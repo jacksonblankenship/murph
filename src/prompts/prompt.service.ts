@@ -10,12 +10,14 @@ import Handlebars from 'handlebars';
 export type PromptName =
   | 'user-direct'
   | 'scheduled-proactive'
-  | 'garden-curator';
+  | 'garden-curator'
+  | 'garden-seeder';
 
 const PROMPT_NAMES: PromptName[] = [
   'user-direct',
   'scheduled-proactive',
   'garden-curator',
+  'garden-seeder',
 ];
 
 interface PromptMetadata {

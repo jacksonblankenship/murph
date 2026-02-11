@@ -3,7 +3,7 @@ import { BullBoardModule } from '@bull-board/nestjs';
 import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { ObsidianModule } from '../obsidian/obsidian.module';
+import { VaultModule } from '../vault';
 import { VectorModule } from '../vector/vector.module';
 import { GardenTenderProcessor } from './garden-tender.processor';
 import { IndexSyncProcessor } from './index-sync.processor';
@@ -11,7 +11,7 @@ import { IndexSyncProcessor } from './index-sync.processor';
 @Module({
   imports: [
     ConfigModule,
-    ObsidianModule,
+    VaultModule,
     VectorModule,
     BullModule.registerQueue(
       {

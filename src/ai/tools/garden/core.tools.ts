@@ -10,6 +10,7 @@ import {
   SIMILARITY_LOW,
 } from './constants';
 
+import { createStubsForBrokenLinks, formatStubResult } from './stub-creator';
 import type { GardenToolsDependencies } from './types';
 import { ensureMdExtension, GROWTH_STAGE_ICONS, sanitizePath } from './utils';
 
@@ -19,12 +20,8 @@ import { ensureMdExtension, GROWTH_STAGE_ICONS, sanitizePath } from './utils';
  * Includes: plant, update, read, browse, uproot
  */
 export function createCoreTools(deps: GardenToolsDependencies) {
-  const {
-    obsidianService,
-    embeddingService,
-    qdrantService,
-    indexSyncProcessor,
-  } = deps;
+  const { vaultService, embeddingService, qdrantService, indexSyncProcessor } =
+    deps;
 
   return {
     plant: tool({
@@ -56,7 +53,7 @@ export function createCoreTools(deps: GardenToolsDependencies) {
             : sanitizedTitle;
 
           // Check if note already exists at this exact path
-          const existing = await obsidianService.readNote(path);
+          const existing = vaultService.getNote(path);
           if (existing) {
             return `Note already exists at "${path}". Use update with mode: 'append' to add to it instead.`;
           }
@@ -85,8 +82,14 @@ export function createCoreTools(deps: GardenToolsDependencies) {
             tags: [],
           });
 
-          await obsidianService.writeNote(path, finalContent);
-          await indexSyncProcessor.queueSingleNote(path, finalContent);
+          await vaultService.writeNote(path, finalContent);
+          await indexSyncProcessor.queueSingleNote(
+            ensureMdExtension(path),
+            finalContent,
+          );
+
+          // Auto-create stub seedlings for any broken wikilinks
+          const stubResult = await createStubsForBrokenLinks(content, deps);
 
           // Include moderate matches as suggestions for linking
           const moderateMatches = similar.filter(
@@ -101,7 +104,7 @@ export function createCoreTools(deps: GardenToolsDependencies) {
             }
           }
 
-          return response + duplicateWarning;
+          return response + duplicateWarning + formatStubResult(stubResult);
         } catch (error) {
           return `Error planting note: ${error.message}`;
         }
@@ -128,35 +131,37 @@ export function createCoreTools(deps: GardenToolsDependencies) {
       }),
       execute: async ({ path, content, mode }) => {
         try {
-          const note = await obsidianService.readNote(path);
+          const note = vaultService.getNote(path);
           if (!note) {
             return `Note not found: ${path}. Use plant to create it first.`;
           }
 
-          const parsed = matter(note.content);
           const tendedAt = formatObsidianDate();
 
           let newContent: string;
           if (mode === 'append') {
-            newContent = matter.stringify(
-              `${parsed.content.trim()}\n\n${content}`,
-              { ...parsed.data, last_tended: tendedAt },
-            );
+            newContent = matter.stringify(`${note.body.trim()}\n\n${content}`, {
+              ...note.frontmatter,
+              last_tended: tendedAt,
+            });
           } else {
             newContent = matter.stringify(content, {
-              ...parsed.data,
+              ...note.frontmatter,
               last_tended: tendedAt,
             });
           }
 
-          await obsidianService.writeNote(path, newContent);
+          await vaultService.writeNote(note.path, newContent);
           await indexSyncProcessor.queueSingleNote(
-            ensureMdExtension(path),
+            ensureMdExtension(note.path),
             newContent,
           );
 
+          // Auto-create stub seedlings for any broken wikilinks in the user-provided content
+          const stubResult = await createStubsForBrokenLinks(content, deps);
+
           const action = mode === 'append' ? 'Tended' : 'Rewrote';
-          return `${action}: ${path}`;
+          return `${action}: ${path}${formatStubResult(stubResult)}`;
         } catch (error) {
           return `Error updating note: ${error.message}`;
         }
@@ -178,42 +183,18 @@ export function createCoreTools(deps: GardenToolsDependencies) {
       }),
       execute: async ({ path, includeBacklinks = false }) => {
         try {
-          const note = await obsidianService.readNote(path);
+          const note = vaultService.getNote(path);
           if (!note) {
             return `Note not found: ${path}`;
           }
 
-          const parsed = matter(note.content);
           const icon =
-            GROWTH_STAGE_ICONS[parsed.data.growth_stage as string] || '';
+            GROWTH_STAGE_ICONS[note.frontmatter.growth_stage as string] || '';
 
-          let response = `**${path}** ${icon}\n\n${parsed.content}`;
+          let response = `**${note.path}** ${icon}\n\n${note.body}`;
 
           if (includeBacklinks) {
-            const normalizedPath = path.replace(/\.md$/, '');
-            const pathName = normalizedPath.split('/').pop();
-            const notes = await obsidianService.getAllNotesWithContent();
-            const wikilinkRegex = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
-            const backlinks: string[] = [];
-
-            for (const n of notes) {
-              if (n.path.replace(/\.md$/, '') === normalizedPath) continue;
-
-              const noteParsed = matter(n.content);
-              let match = wikilinkRegex.exec(noteParsed.content);
-              while (match !== null) {
-                const linkTarget = match[1];
-                if (
-                  linkTarget === normalizedPath ||
-                  linkTarget === pathName ||
-                  linkTarget.endsWith(`/${pathName}`)
-                ) {
-                  backlinks.push(n.path.replace(/\.md$/, ''));
-                  break;
-                }
-                match = wikilinkRegex.exec(noteParsed.content);
-              }
-            }
+            const backlinks = vaultService.getBacklinks(note.path);
 
             if (backlinks.length > 0) {
               response += `\n\n---\n**Backlinks (${backlinks.length}):**\n`;
@@ -247,21 +228,18 @@ export function createCoreTools(deps: GardenToolsDependencies) {
       }),
       execute: async ({ folder, growth_stage }) => {
         try {
-          const notes = await obsidianService.listNotes(folder);
+          const notes = vaultService.listNotes(folder);
           if (notes.length === 0) {
             return folder ? `No notes found in: ${folder}` : 'No notes found.';
           }
 
-          // If growth_stage filter is specified, we need to check each note
+          // If growth_stage filter is specified, check each note
           if (growth_stage) {
             const filtered: string[] = [];
             for (const notePath of notes) {
-              const note = await obsidianService.readNote(notePath);
-              if (note) {
-                const parsed = matter(note.content);
-                if (parsed.data.growth_stage === growth_stage) {
-                  filtered.push(notePath);
-                }
+              const note = vaultService.getNote(notePath);
+              if (note?.frontmatter.growth_stage === growth_stage) {
+                filtered.push(notePath);
               }
             }
 
@@ -289,7 +267,7 @@ export function createCoreTools(deps: GardenToolsDependencies) {
       }),
       execute: async ({ path }) => {
         try {
-          await obsidianService.deleteNote(path);
+          await vaultService.deleteNote(path);
           await qdrantService.deleteNote(path);
           return `Uprooted: ${path}`;
         } catch (error) {

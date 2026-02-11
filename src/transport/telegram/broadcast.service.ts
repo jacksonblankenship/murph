@@ -20,6 +20,11 @@ export class BroadcastService {
   }
 
   async sendMessage(userId: number, message: string): Promise<boolean> {
+    if (!message.trim()) {
+      this.logger.warn({ userId }, 'Skipping empty message');
+      return true;
+    }
+
     try {
       await this.bot.telegram.sendMessage(userId, message);
       return true;

@@ -1,14 +1,29 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { Note } from '../../vault';
 import { createGardenTools } from './garden';
 
+/** Helper to create a mock Note instance from path and raw content. */
+function createMockNote(
+  path: string,
+  content: string,
+  stat?: Partial<{ ctime: Date; mtime: Date; size: number }>,
+): Note {
+  const normalizedPath = path.endsWith('.md') ? path : `${path}.md`;
+  return new Note(normalizedPath, content, {
+    ctime: stat?.ctime ?? new Date('2024-01-01'),
+    mtime: stat?.mtime ?? new Date('2024-01-01'),
+    size: stat?.size ?? content.length,
+  });
+}
+
 describe('createGardenTools', () => {
-  let mockObsidianService: {
-    readNote: ReturnType<typeof mock>;
+  let mockVaultService: {
+    getNote: ReturnType<typeof mock>;
     writeNote: ReturnType<typeof mock>;
     deleteNote: ReturnType<typeof mock>;
     listNotes: ReturnType<typeof mock>;
-    getAllNotesWithContent: ReturnType<typeof mock>;
-    getCreatedDate: ReturnType<typeof mock>;
+    getAllNotes: ReturnType<typeof mock>;
+    getBacklinks: ReturnType<typeof mock>;
   };
   let mockEmbeddingService: { embed: ReturnType<typeof mock> };
   let mockQdrantService: {
@@ -21,13 +36,13 @@ describe('createGardenTools', () => {
   let tools: ReturnType<typeof createGardenTools>;
 
   beforeEach(() => {
-    mockObsidianService = {
-      readNote: mock(() => Promise.resolve(null)),
+    mockVaultService = {
+      getNote: mock(() => null),
       writeNote: mock(() => Promise.resolve()),
       deleteNote: mock(() => Promise.resolve()),
-      listNotes: mock(() => Promise.resolve([])),
-      getAllNotesWithContent: mock(() => Promise.resolve([])),
-      getCreatedDate: mock(() => Promise.resolve(new Date('2024-01-01'))),
+      listNotes: mock(() => []),
+      getAllNotes: mock(() => []),
+      getBacklinks: mock(() => []),
     };
 
     mockEmbeddingService = {
@@ -46,7 +61,7 @@ describe('createGardenTools', () => {
     };
 
     tools = createGardenTools({
-      obsidianService: mockObsidianService as never,
+      vaultService: mockVaultService as never,
       embeddingService: mockEmbeddingService as never,
       qdrantService: mockQdrantService as never,
       indexSyncProcessor: mockIndexSyncProcessor as never,
@@ -55,9 +70,7 @@ describe('createGardenTools', () => {
 
   describe('wander', () => {
     test('returns message when no notes exist', async () => {
-      mockObsidianService.getAllNotesWithContent = mock(() =>
-        Promise.resolve([]),
-      );
+      mockVaultService.getAllNotes = mock(() => []);
 
       const result = await tools.wander.execute(
         { excludeRecentDays: 7, limit: 3 },
@@ -68,20 +81,16 @@ describe('createGardenTools', () => {
     });
 
     test('filters by growth stage', async () => {
-      mockObsidianService.getAllNotesWithContent = mock(() =>
-        Promise.resolve([
-          {
-            path: 'Notes/Seedling.md',
-            content:
-              '---\ngrowth_stage: seedling\nlast_tended: 2024-01-01T00:00:00.000Z\n---\nA seedling',
-          },
-          {
-            path: 'Notes/Evergreen.md',
-            content:
-              '---\ngrowth_stage: evergreen\nlast_tended: 2024-01-01T00:00:00.000Z\n---\nAn evergreen',
-          },
-        ]),
-      );
+      mockVaultService.getAllNotes = mock(() => [
+        createMockNote(
+          'Notes/Seedling',
+          '---\ngrowth_stage: seedling\nlast_tended: 2024-01-01T00:00:00.000Z\n---\nA seedling',
+        ),
+        createMockNote(
+          'Notes/Evergreen',
+          '---\ngrowth_stage: evergreen\nlast_tended: 2024-01-01T00:00:00.000Z\n---\nAn evergreen',
+        ),
+      ]);
 
       const result = await tools.wander.execute(
         { growth_stage: 'evergreen', excludeRecentDays: 7, limit: 3 },
@@ -99,18 +108,16 @@ describe('createGardenTools', () => {
       const oldDate = new Date();
       oldDate.setDate(oldDate.getDate() - 14); // Two weeks ago
 
-      mockObsidianService.getAllNotesWithContent = mock(() =>
-        Promise.resolve([
-          {
-            path: 'Notes/Recent.md',
-            content: `---\ngrowth_stage: seedling\nlast_tended: ${recentDate.toISOString()}\n---\nRecent note`,
-          },
-          {
-            path: 'Notes/Old.md',
-            content: `---\ngrowth_stage: seedling\nlast_tended: ${oldDate.toISOString()}\n---\nOld note`,
-          },
-        ]),
-      );
+      mockVaultService.getAllNotes = mock(() => [
+        createMockNote(
+          'Notes/Recent',
+          `---\ngrowth_stage: seedling\nlast_tended: ${recentDate.toISOString()}\n---\nRecent note`,
+        ),
+        createMockNote(
+          'Notes/Old',
+          `---\ngrowth_stage: seedling\nlast_tended: ${oldDate.toISOString()}\n---\nOld note`,
+        ),
+      ]);
 
       const result = await tools.wander.execute(
         { excludeRecentDays: 7, limit: 3 },
@@ -125,22 +132,20 @@ describe('createGardenTools', () => {
       const oldDate = new Date();
       oldDate.setDate(oldDate.getDate() - 14);
 
-      mockObsidianService.getAllNotesWithContent = mock(() =>
-        Promise.resolve([
-          {
-            path: 'Notes/Note1.md',
-            content: `---\ngrowth_stage: seedling\nlast_tended: ${oldDate.toISOString()}\n---\nNote 1`,
-          },
-          {
-            path: 'Notes/Note2.md',
-            content: `---\ngrowth_stage: seedling\nlast_tended: ${oldDate.toISOString()}\n---\nNote 2`,
-          },
-          {
-            path: 'Notes/Note3.md',
-            content: `---\ngrowth_stage: seedling\nlast_tended: ${oldDate.toISOString()}\n---\nNote 3`,
-          },
-        ]),
-      );
+      mockVaultService.getAllNotes = mock(() => [
+        createMockNote(
+          'Notes/Note1',
+          `---\ngrowth_stage: seedling\nlast_tended: ${oldDate.toISOString()}\n---\nNote 1`,
+        ),
+        createMockNote(
+          'Notes/Note2',
+          `---\ngrowth_stage: seedling\nlast_tended: ${oldDate.toISOString()}\n---\nNote 2`,
+        ),
+        createMockNote(
+          'Notes/Note3',
+          `---\ngrowth_stage: seedling\nlast_tended: ${oldDate.toISOString()}\n---\nNote 3`,
+        ),
+      ]);
 
       const result = await tools.wander.execute(
         { excludeRecentDays: 7, limit: 1 },
@@ -156,18 +161,7 @@ describe('createGardenTools', () => {
 
   describe('backlinks', () => {
     test('returns message when no backlinks exist', async () => {
-      mockObsidianService.getAllNotesWithContent = mock(() =>
-        Promise.resolve([
-          {
-            path: 'Notes/Target.md',
-            content: '---\ngrowth_stage: seedling\n---\nA target note',
-          },
-          {
-            path: 'Notes/Other.md',
-            content: '---\ngrowth_stage: seedling\n---\nNo links here',
-          },
-        ]),
-      );
+      mockVaultService.getBacklinks = mock(() => []);
 
       const result = await tools.backlinks.execute(
         { path: 'Notes/Target' },
@@ -178,19 +172,16 @@ describe('createGardenTools', () => {
     });
 
     test('finds notes that link to target', async () => {
-      mockObsidianService.getAllNotesWithContent = mock(() =>
-        Promise.resolve([
-          {
-            path: 'Notes/Target.md',
-            content: '---\ngrowth_stage: seedling\n---\nA target note',
-          },
-          {
-            path: 'Notes/Linking.md',
-            content:
-              '---\ngrowth_stage: seedling\n---\nThis references [[Target]] here',
-          },
-        ]),
-      );
+      mockVaultService.getBacklinks = mock(() => ['Notes/Linking.md']);
+      mockVaultService.getNote = mock((path: string) => {
+        if (path === 'Notes/Linking.md') {
+          return createMockNote(
+            'Notes/Linking',
+            '---\ngrowth_stage: seedling\n---\nThis references [[Target]] here',
+          );
+        }
+        return null;
+      });
 
       const result = await tools.backlinks.execute(
         { path: 'Notes/Target' },
@@ -203,19 +194,16 @@ describe('createGardenTools', () => {
     });
 
     test('handles full path links', async () => {
-      mockObsidianService.getAllNotesWithContent = mock(() =>
-        Promise.resolve([
-          {
-            path: 'People/Luna.md',
-            content: '---\ngrowth_stage: seedling\n---\nAbout Luna',
-          },
-          {
-            path: 'Notes/Linking.md',
-            content:
-              '---\ngrowth_stage: seedling\n---\nMet [[People/Luna]] today',
-          },
-        ]),
-      );
+      mockVaultService.getBacklinks = mock(() => ['Notes/Linking.md']);
+      mockVaultService.getNote = mock((path: string) => {
+        if (path === 'Notes/Linking.md') {
+          return createMockNote(
+            'Notes/Linking',
+            '---\ngrowth_stage: seedling\n---\nMet [[People/Luna]] today',
+          );
+        }
+        return null;
+      });
 
       const result = await tools.backlinks.execute(
         { path: 'People/Luna' },
@@ -227,24 +215,25 @@ describe('createGardenTools', () => {
     });
 
     test('handles multiple backlinks', async () => {
-      mockObsidianService.getAllNotesWithContent = mock(() =>
-        Promise.resolve([
-          {
-            path: 'Notes/Target.md',
-            content: '---\ngrowth_stage: seedling\n---\nA target note',
-          },
-          {
-            path: 'Notes/First.md',
-            content:
-              '---\ngrowth_stage: seedling\n---\nFirst link to [[Target]]',
-          },
-          {
-            path: 'Notes/Second.md',
-            content:
-              '---\ngrowth_stage: seedling\n---\nSecond reference to [[Target]]',
-          },
-        ]),
-      );
+      mockVaultService.getBacklinks = mock(() => [
+        'Notes/First.md',
+        'Notes/Second.md',
+      ]);
+      mockVaultService.getNote = mock((path: string) => {
+        if (path === 'Notes/First.md') {
+          return createMockNote(
+            'Notes/First',
+            '---\ngrowth_stage: seedling\n---\nFirst link to [[Target]]',
+          );
+        }
+        if (path === 'Notes/Second.md') {
+          return createMockNote(
+            'Notes/Second',
+            '---\ngrowth_stage: seedling\n---\nSecond reference to [[Target]]',
+          );
+        }
+        return null;
+      });
 
       const result = await tools.backlinks.execute(
         { path: 'Notes/Target' },
@@ -259,11 +248,11 @@ describe('createGardenTools', () => {
 
   describe('read with includeBacklinks', () => {
     test('returns content without backlinks by default', async () => {
-      mockObsidianService.readNote = mock(() =>
-        Promise.resolve({
-          path: 'Notes/Test.md',
-          content: '---\ngrowth_stage: seedling\n---\nTest content',
-        }),
+      mockVaultService.getNote = mock(() =>
+        createMockNote(
+          'Notes/Test',
+          '---\ngrowth_stage: seedling\n---\nTest content',
+        ),
       );
 
       const result = await tools.read.execute(
@@ -276,25 +265,13 @@ describe('createGardenTools', () => {
     });
 
     test('includes backlinks when requested', async () => {
-      mockObsidianService.readNote = mock(() =>
-        Promise.resolve({
-          path: 'Notes/Target.md',
-          content: '---\ngrowth_stage: seedling\n---\nTarget content',
-        }),
+      mockVaultService.getNote = mock(() =>
+        createMockNote(
+          'Notes/Target',
+          '---\ngrowth_stage: seedling\n---\nTarget content',
+        ),
       );
-
-      mockObsidianService.getAllNotesWithContent = mock(() =>
-        Promise.resolve([
-          {
-            path: 'Notes/Target.md',
-            content: '---\ngrowth_stage: seedling\n---\nTarget content',
-          },
-          {
-            path: 'Notes/Linking.md',
-            content: '---\ngrowth_stage: seedling\n---\nLinks to [[Target]]',
-          },
-        ]),
-      );
+      mockVaultService.getBacklinks = mock(() => ['Notes/Linking.md']);
 
       const result = await tools.read.execute(
         { path: 'Notes/Target', includeBacklinks: true },
@@ -303,29 +280,17 @@ describe('createGardenTools', () => {
 
       expect(result).toContain('Target content');
       expect(result).toContain('Backlinks (1)');
-      expect(result).toContain('[[Notes/Linking]]');
+      expect(result).toContain('[[Notes/Linking.md]]');
     });
 
     test('shows no backlinks message when none exist', async () => {
-      mockObsidianService.readNote = mock(() =>
-        Promise.resolve({
-          path: 'Notes/Lonely.md',
-          content: '---\ngrowth_stage: seedling\n---\nLonely content',
-        }),
+      mockVaultService.getNote = mock(() =>
+        createMockNote(
+          'Notes/Lonely',
+          '---\ngrowth_stage: seedling\n---\nLonely content',
+        ),
       );
-
-      mockObsidianService.getAllNotesWithContent = mock(() =>
-        Promise.resolve([
-          {
-            path: 'Notes/Lonely.md',
-            content: '---\ngrowth_stage: seedling\n---\nLonely content',
-          },
-          {
-            path: 'Notes/Other.md',
-            content: '---\ngrowth_stage: seedling\n---\nNo links here',
-          },
-        ]),
-      );
+      mockVaultService.getBacklinks = mock(() => []);
 
       const result = await tools.read.execute(
         { path: 'Notes/Lonely', includeBacklinks: true },
@@ -339,11 +304,11 @@ describe('createGardenTools', () => {
 
   describe('update with replace mode', () => {
     test('replaces note content preserving frontmatter', async () => {
-      mockObsidianService.readNote = mock(() =>
-        Promise.resolve({
-          path: 'Notes/Test.md',
-          content: '---\ngrowth_stage: budding\n---\nOld content',
-        }),
+      mockVaultService.getNote = mock(() =>
+        createMockNote(
+          'Notes/Test',
+          '---\ngrowth_stage: budding\n---\nOld content',
+        ),
       );
 
       const result = await tools.update.execute(
@@ -357,12 +322,12 @@ describe('createGardenTools', () => {
 
       expect(result).toContain('Rewrote');
       expect(result).toContain('Notes/Test');
-      expect(mockObsidianService.writeNote).toHaveBeenCalled();
+      expect(mockVaultService.writeNote).toHaveBeenCalled();
       expect(mockIndexSyncProcessor.queueSingleNote).toHaveBeenCalled();
     });
 
     test('returns error for non-existent note', async () => {
-      mockObsidianService.readNote = mock(() => Promise.resolve(null));
+      mockVaultService.getNote = mock(() => null);
 
       const result = await tools.update.execute(
         {
@@ -379,25 +344,23 @@ describe('createGardenTools', () => {
 
   describe('merge', () => {
     test('merges source into target and deletes source', async () => {
-      mockObsidianService.readNote = mock((path: string) => {
+      mockVaultService.getNote = mock((path: string) => {
         if (path.includes('Source')) {
-          return Promise.resolve({
-            path: 'Notes/Source.md',
-            content: '---\ngrowth_stage: seedling\n---\nSource content',
-          });
+          return createMockNote(
+            'Notes/Source',
+            '---\ngrowth_stage: seedling\n---\nSource content',
+          );
         }
         if (path.includes('Target')) {
-          return Promise.resolve({
-            path: 'Notes/Target.md',
-            content: '---\ngrowth_stage: budding\n---\nTarget content',
-          });
+          return createMockNote(
+            'Notes/Target',
+            '---\ngrowth_stage: budding\n---\nTarget content',
+          );
         }
-        return Promise.resolve(null);
+        return null;
       });
 
-      mockObsidianService.getAllNotesWithContent = mock(() =>
-        Promise.resolve([]),
-      );
+      mockVaultService.getAllNotes = mock(() => []);
 
       const result = await tools.merge.execute(
         {
@@ -410,14 +373,12 @@ describe('createGardenTools', () => {
       );
 
       expect(result).toContain('Merged "Notes/Source" into "Notes/Target"');
-      expect(mockObsidianService.deleteNote).toHaveBeenCalledWith(
-        'Notes/Source',
-      );
+      expect(mockVaultService.deleteNote).toHaveBeenCalledWith('Notes/Source');
       expect(mockQdrantService.deleteNote).toHaveBeenCalledWith('Notes/Source');
     });
 
     test('returns error when source not found', async () => {
-      mockObsidianService.readNote = mock(() => Promise.resolve(null));
+      mockVaultService.getNote = mock(() => null);
 
       const result = await tools.merge.execute(
         {
@@ -435,11 +396,11 @@ describe('createGardenTools', () => {
 
   describe('split', () => {
     test('creates new notes from split', async () => {
-      mockObsidianService.readNote = mock(() =>
-        Promise.resolve({
-          path: 'Notes/BigNote.md',
-          content: '---\ngrowth_stage: seedling\n---\nLots of content here',
-        }),
+      mockVaultService.getNote = mock(() =>
+        createMockNote(
+          'Notes/BigNote',
+          '---\ngrowth_stage: seedling\n---\nLots of content here',
+        ),
       );
 
       const result = await tools.split.execute(
@@ -462,16 +423,16 @@ describe('createGardenTools', () => {
       expect(result).toContain('Split and deleted');
       expect(result).toContain('Concepts/Concept A');
       expect(result).toContain('Concept B');
-      expect(mockObsidianService.writeNote).toHaveBeenCalledTimes(2);
-      expect(mockObsidianService.deleteNote).toHaveBeenCalled();
+      expect(mockVaultService.writeNote).toHaveBeenCalledTimes(2);
+      expect(mockVaultService.deleteNote).toHaveBeenCalled();
     });
 
     test('keeps original when deleteOriginal is false', async () => {
-      mockObsidianService.readNote = mock(() =>
-        Promise.resolve({
-          path: 'Notes/HubNote.md',
-          content: '---\ngrowth_stage: seedling\n---\nHub content',
-        }),
+      mockVaultService.getNote = mock(() =>
+        createMockNote(
+          'Notes/HubNote',
+          '---\ngrowth_stage: seedling\n---\nHub content',
+        ),
       );
 
       const result = await tools.split.execute(
@@ -486,17 +447,17 @@ describe('createGardenTools', () => {
       );
 
       expect(result).toContain('Split "Notes/HubNote"');
-      expect(mockObsidianService.deleteNote).not.toHaveBeenCalled();
+      expect(mockVaultService.deleteNote).not.toHaveBeenCalled();
     });
   });
 
   describe('promote', () => {
     test('promotes seedling to budding', async () => {
-      mockObsidianService.readNote = mock(() =>
-        Promise.resolve({
-          path: 'Notes/Growing.md',
-          content: '---\ngrowth_stage: seedling\n---\nContent',
-        }),
+      mockVaultService.getNote = mock(() =>
+        createMockNote(
+          'Notes/Growing',
+          '---\ngrowth_stage: seedling\n---\nContent',
+        ),
       );
 
       const result = await tools.promote.execute(
@@ -514,11 +475,11 @@ describe('createGardenTools', () => {
     });
 
     test('rejects demotion', async () => {
-      mockObsidianService.readNote = mock(() =>
-        Promise.resolve({
-          path: 'Notes/Mature.md',
-          content: '---\ngrowth_stage: evergreen\n---\nContent',
-        }),
+      mockVaultService.getNote = mock(() =>
+        createMockNote(
+          'Notes/Mature',
+          '---\ngrowth_stage: evergreen\n---\nContent',
+        ),
       );
 
       const result = await tools.promote.execute(
@@ -583,24 +544,20 @@ describe('createGardenTools', () => {
       const oldDate = new Date();
       oldDate.setDate(oldDate.getDate() - 14); // 14 days ago
 
-      mockObsidianService.getAllNotesWithContent = mock(() =>
-        Promise.resolve([
-          {
-            path: 'Notes/Recent.md',
-            content: '---\ngrowth_stage: seedling\n---\nRecent note',
-          },
-          {
-            path: 'Notes/Old.md',
-            content: '---\ngrowth_stage: seedling\n---\nOld note',
-          },
-        ]),
-      );
+      mockVaultService.getAllNotes = mock(() => [
+        createMockNote(
+          'Notes/Recent',
+          '---\ngrowth_stage: seedling\n---\nRecent note',
+          { ctime: recentDate },
+        ),
+        createMockNote(
+          'Notes/Old',
+          '---\ngrowth_stage: seedling\n---\nOld note',
+          { ctime: oldDate },
+        ),
+      ]);
 
-      // Return different created dates based on path
-      mockObsidianService.getCreatedDate = mock((path: string) => {
-        if (path.includes('Recent')) return Promise.resolve(recentDate);
-        return Promise.resolve(oldDate);
-      });
+      mockVaultService.getBacklinks = mock(() => []);
 
       const result = await tools.orphans.execute(
         { type: 'isolated', maxAgeDays: 7, limit: 10 },
@@ -615,18 +572,15 @@ describe('createGardenTools', () => {
       const recentDate = new Date();
       recentDate.setDate(recentDate.getDate() - 1); // Yesterday
 
-      mockObsidianService.getAllNotesWithContent = mock(() =>
-        Promise.resolve([
-          {
-            path: 'Notes/Recent.md',
-            content: '---\ngrowth_stage: seedling\n---\nRecent note',
-          },
-        ]),
-      );
+      mockVaultService.getAllNotes = mock(() => [
+        createMockNote(
+          'Notes/Recent',
+          '---\ngrowth_stage: seedling\n---\nRecent note',
+          { ctime: recentDate },
+        ),
+      ]);
 
-      mockObsidianService.getCreatedDate = mock(() =>
-        Promise.resolve(recentDate),
-      );
+      mockVaultService.getBacklinks = mock(() => []);
 
       const result = await tools.orphans.execute(
         { type: 'isolated', maxAgeDays: 0, limit: 10 },
@@ -640,20 +594,20 @@ describe('createGardenTools', () => {
       const oldDate = new Date();
       oldDate.setDate(oldDate.getDate() - 14);
 
-      mockObsidianService.getAllNotesWithContent = mock(() =>
-        Promise.resolve([
-          {
-            path: 'Notes/Frontier.md',
-            content: '---\ngrowth_stage: seedling\n---\nLinks to [[Other]]',
-          },
-          {
-            path: 'Notes/Other.md',
-            content: '---\ngrowth_stage: seedling\n---\nNo links',
-          },
-        ]),
-      );
+      mockVaultService.getAllNotes = mock(() => [
+        createMockNote(
+          'Notes/Frontier',
+          '---\ngrowth_stage: seedling\n---\nLinks to [[Other]]',
+          { ctime: oldDate },
+        ),
+        createMockNote(
+          'Notes/Other',
+          '---\ngrowth_stage: seedling\n---\nNo links',
+          { ctime: oldDate },
+        ),
+      ]);
 
-      mockObsidianService.getCreatedDate = mock(() => Promise.resolve(oldDate));
+      mockVaultService.getBacklinks = mock(() => []);
 
       const result = await tools.orphans.execute(
         { type: 'frontier', maxAgeDays: 7, limit: 10 },
@@ -667,34 +621,32 @@ describe('createGardenTools', () => {
 
   describe('moc_candidates', () => {
     test('finds notes with 5+ inbound links', async () => {
-      mockObsidianService.getAllNotesWithContent = mock(() =>
-        Promise.resolve([
-          {
-            path: 'Concepts/Important.md',
-            content: '---\ngrowth_stage: evergreen\n---\nImportant concept',
-          },
-          {
-            path: 'Notes/A.md',
-            content: '---\n---\nLinks to [[Important]]',
-          },
-          {
-            path: 'Notes/B.md',
-            content: '---\n---\nAlso links to [[Important]]',
-          },
-          {
-            path: 'Notes/C.md',
-            content: '---\n---\nReferences [[Important]]',
-          },
-          {
-            path: 'Notes/D.md',
-            content: '---\n---\nMentions [[Important]]',
-          },
-          {
-            path: 'Notes/E.md',
-            content: '---\n---\nSees [[Important]]',
-          },
-        ]),
+      const importantNote = createMockNote(
+        'Concepts/Important',
+        '---\ngrowth_stage: evergreen\n---\nImportant concept',
       );
+
+      mockVaultService.getAllNotes = mock(() => [
+        importantNote,
+        createMockNote('Notes/A', '---\n---\nLinks to [[Important]]'),
+        createMockNote('Notes/B', '---\n---\nAlso links to [[Important]]'),
+        createMockNote('Notes/C', '---\n---\nReferences [[Important]]'),
+        createMockNote('Notes/D', '---\n---\nMentions [[Important]]'),
+        createMockNote('Notes/E', '---\n---\nSees [[Important]]'),
+      ]);
+
+      mockVaultService.getBacklinks = mock((path: string) => {
+        if (path === 'Concepts/Important.md') {
+          return [
+            'Notes/A.md',
+            'Notes/B.md',
+            'Notes/C.md',
+            'Notes/D.md',
+            'Notes/E.md',
+          ];
+        }
+        return [];
+      });
 
       const result = await tools.moc_candidates.execute(
         { minInboundLinks: 5, limit: 10 },
@@ -707,34 +659,20 @@ describe('createGardenTools', () => {
     });
 
     test('excludes existing MOCs by title', async () => {
-      mockObsidianService.getAllNotesWithContent = mock(() =>
-        Promise.resolve([
-          {
-            path: 'Maps/Existing MOC.md',
-            content: '---\ngrowth_stage: seedling\n---\nAlready an MOC',
-          },
-          {
-            path: 'Notes/A.md',
-            content: '---\n---\nLinks to [[Existing MOC]]',
-          },
-          {
-            path: 'Notes/B.md',
-            content: '---\n---\nLinks to [[Existing MOC]]',
-          },
-          {
-            path: 'Notes/C.md',
-            content: '---\n---\nLinks to [[Existing MOC]]',
-          },
-          {
-            path: 'Notes/D.md',
-            content: '---\n---\nLinks to [[Existing MOC]]',
-          },
-          {
-            path: 'Notes/E.md',
-            content: '---\n---\nLinks to [[Existing MOC]]',
-          },
-        ]),
-      );
+      mockVaultService.getAllNotes = mock(() => [
+        createMockNote(
+          'Maps/Existing MOC',
+          '---\ngrowth_stage: seedling\n---\nAlready an MOC',
+        ),
+      ]);
+
+      mockVaultService.getBacklinks = mock(() => [
+        'Notes/A.md',
+        'Notes/B.md',
+        'Notes/C.md',
+        'Notes/D.md',
+        'Notes/E.md',
+      ]);
 
       const result = await tools.moc_candidates.execute(
         { minInboundLinks: 5, limit: 10 },
@@ -747,7 +685,7 @@ describe('createGardenTools', () => {
 
   describe('create_moc', () => {
     test('creates MOC with linked notes', async () => {
-      mockObsidianService.readNote = mock(() => Promise.resolve(null));
+      mockVaultService.getNote = mock(() => null);
 
       const result = await tools.create_moc.execute(
         {
@@ -761,15 +699,15 @@ describe('createGardenTools', () => {
 
       expect(result).toContain('Created MOC "Maps/Productivity MOC"');
       expect(result).toContain('3 linked notes');
-      expect(mockObsidianService.writeNote).toHaveBeenCalled();
+      expect(mockVaultService.writeNote).toHaveBeenCalled();
     });
 
     test('rejects if MOC already exists', async () => {
-      mockObsidianService.readNote = mock(() =>
-        Promise.resolve({
-          path: 'Maps/Existing.md',
-          content: '---\ngrowth_stage: seedling\n---\nExisting',
-        }),
+      mockVaultService.getNote = mock(() =>
+        createMockNote(
+          'Maps/Existing',
+          '---\ngrowth_stage: seedling\n---\nExisting',
+        ),
       );
 
       const result = await tools.create_moc.execute(
@@ -787,12 +725,11 @@ describe('createGardenTools', () => {
 
   describe('disconnect', () => {
     test('removes link from note', async () => {
-      mockObsidianService.readNote = mock(() =>
-        Promise.resolve({
-          path: 'Notes/Source.md',
-          content:
-            '---\ngrowth_stage: seedling\n---\nThis links to [[Target]] here',
-        }),
+      mockVaultService.getNote = mock(() =>
+        createMockNote(
+          'Notes/Source',
+          '---\ngrowth_stage: seedling\n---\nThis links to [[Target]] here',
+        ),
       );
 
       const result = await tools.disconnect.execute(
@@ -801,15 +738,15 @@ describe('createGardenTools', () => {
       );
 
       expect(result).toContain('Removed link to [[Target]]');
-      expect(mockObsidianService.writeNote).toHaveBeenCalled();
+      expect(mockVaultService.writeNote).toHaveBeenCalled();
     });
 
     test('returns message when link not found', async () => {
-      mockObsidianService.readNote = mock(() =>
-        Promise.resolve({
-          path: 'Notes/Source.md',
-          content: '---\ngrowth_stage: seedling\n---\nNo links here',
-        }),
+      mockVaultService.getNote = mock(() =>
+        createMockNote(
+          'Notes/Source',
+          '---\ngrowth_stage: seedling\n---\nNo links here',
+        ),
       );
 
       const result = await tools.disconnect.execute(
@@ -823,20 +760,16 @@ describe('createGardenTools', () => {
 
   describe('broken_links', () => {
     test('finds broken wikilinks', async () => {
-      mockObsidianService.getAllNotesWithContent = mock(() =>
-        Promise.resolve([
-          {
-            path: 'Notes/WithBroken.md',
-            content:
-              '---\ngrowth_stage: seedling\n---\nLinks to [[NonExistent]] here',
-          },
-          {
-            path: 'Notes/Valid.md',
-            content:
-              '---\ngrowth_stage: seedling\n---\nLinks to [[WithBroken]]',
-          },
-        ]),
-      );
+      mockVaultService.getAllNotes = mock(() => [
+        createMockNote(
+          'Notes/WithBroken',
+          '---\ngrowth_stage: seedling\n---\nLinks to [[NonExistent]] here',
+        ),
+        createMockNote(
+          'Notes/Valid',
+          '---\ngrowth_stage: seedling\n---\nLinks to [[WithBroken]]',
+        ),
+      ]);
 
       const result = await tools.broken_links.execute(
         { limit: 20 },
@@ -849,18 +782,10 @@ describe('createGardenTools', () => {
     });
 
     test('returns success message when no broken links', async () => {
-      mockObsidianService.getAllNotesWithContent = mock(() =>
-        Promise.resolve([
-          {
-            path: 'Notes/A.md',
-            content: '---\n---\nLinks to [[B]]',
-          },
-          {
-            path: 'Notes/B.md',
-            content: '---\n---\nLinks to [[A]]',
-          },
-        ]),
-      );
+      mockVaultService.getAllNotes = mock(() => [
+        createMockNote('Notes/A', '---\n---\nLinks to [[B]]'),
+        createMockNote('Notes/B', '---\n---\nLinks to [[A]]'),
+      ]);
 
       const result = await tools.broken_links.execute(
         { limit: 20 },

@@ -2,11 +2,8 @@ import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Job } from 'bullmq';
 import { PinoLogger } from 'nestjs-pino';
-import {
-  Events,
-  type MessageBroadcastEvent,
-  type ScheduledTaskTriggeredEvent,
-} from '../common/events';
+import { Events, type MessageBroadcastEvent } from '../common/events';
+import { AgentDispatcher } from '../dispatcher';
 import { RedisService } from '../redis/redis.service';
 import { ScheduledTask, TaskType } from './task.schemas';
 
@@ -21,6 +18,7 @@ export class TaskProcessor extends WorkerHost {
     private readonly logger: PinoLogger,
     private readonly redisService: RedisService,
     private readonly eventEmitter: EventEmitter2,
+    private readonly dispatcher: AgentDispatcher,
   ) {
     super();
     this.logger.setContext(TaskProcessor.name);
@@ -47,14 +45,24 @@ export class TaskProcessor extends WorkerHost {
     }
 
     try {
-      // Emit event to trigger LLM processing
-      const triggeredEvent: ScheduledTaskTriggeredEvent = {
-        userId: task.userId,
-        taskId: task.id,
-        message: task.message,
-      };
-      this.eventEmitter.emit(Events.SCHEDULED_TASK_TRIGGERED, triggeredEvent);
-      this.logger.info({ taskId: task.id }, 'Emitted scheduled task trigger');
+      // Dispatch directly to the scheduled-messages queue
+      await this.dispatcher.dispatch({
+        queue: 'scheduled-messages',
+        jobName: 'process-scheduled-message',
+        data: {
+          userId: task.userId,
+          content: task.message,
+          taskId: task.id,
+          timestamp: Date.now(),
+        },
+        jobOptions: {
+          jobId: `scheduled-${task.id}-${Date.now()}`,
+        },
+      });
+      this.logger.info(
+        { taskId: task.id },
+        'Dispatched scheduled task to queue',
+      );
 
       // Update last executed time
       const redis = this.redisService.getClient();

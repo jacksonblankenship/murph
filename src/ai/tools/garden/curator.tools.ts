@@ -2,6 +2,7 @@ import { tool } from 'ai';
 import matter from 'gray-matter';
 import { z } from 'zod';
 import { formatObsidianDate } from '../../../common/obsidian-date';
+import { createStubsForBrokenLinks, formatStubResult } from './stub-creator';
 import type { GardenToolsDependencies } from './types';
 import { ensureMdExtension, GROWTH_STAGE_ICONS, sanitizePath } from './utils';
 
@@ -11,7 +12,7 @@ import { ensureMdExtension, GROWTH_STAGE_ICONS, sanitizePath } from './utils';
  * Includes: merge, split, promote
  */
 export function createCuratorTools(deps: GardenToolsDependencies) {
-  const { obsidianService, qdrantService, indexSyncProcessor } = deps;
+  const { vaultService, qdrantService, indexSyncProcessor } = deps;
 
   return {
     merge: tool({
@@ -33,8 +34,8 @@ export function createCuratorTools(deps: GardenToolsDependencies) {
       }),
       execute: async ({ sourcePath, targetPath, mergedContent, reason }) => {
         try {
-          const sourceNote = await obsidianService.readNote(sourcePath);
-          const targetNote = await obsidianService.readNote(targetPath);
+          const sourceNote = vaultService.getNote(sourcePath);
+          const targetNote = vaultService.getNote(targetPath);
 
           if (!sourceNote) {
             return `Source note not found: ${sourcePath}`;
@@ -43,23 +44,22 @@ export function createCuratorTools(deps: GardenToolsDependencies) {
             return `Target note not found: ${targetPath}`;
           }
 
-          const targetParsed = matter(targetNote.content);
           const tendedAt = formatObsidianDate();
 
           // Write merged content to target
           const newContent = matter.stringify(mergedContent, {
-            ...targetParsed.data,
+            ...targetNote.frontmatter,
             last_tended: tendedAt,
           });
 
-          await obsidianService.writeNote(targetPath, newContent);
+          await vaultService.writeNote(targetPath, newContent);
           await indexSyncProcessor.queueSingleNote(
             ensureMdExtension(targetPath),
             newContent,
           );
 
           // Delete source note
-          await obsidianService.deleteNote(sourcePath);
+          await vaultService.deleteNote(sourcePath);
           await qdrantService.deleteNote(sourcePath);
 
           // Update links pointing to deleted source
@@ -67,7 +67,7 @@ export function createCuratorTools(deps: GardenToolsDependencies) {
           const targetName = targetPath.replace(/\.md$/, '').split('/').pop();
 
           if (sourceName && targetName && sourceName !== targetName) {
-            const allNotes = await obsidianService.getAllNotesWithContent();
+            const allNotes = vaultService.getAllNotes();
             for (const note of allNotes) {
               const normalizedNotePath = note.path.replace(/\.md$/, '');
               if (
@@ -77,13 +77,13 @@ export function createCuratorTools(deps: GardenToolsDependencies) {
                 continue;
               }
 
-              const updatedNoteContent = note.content.replace(
+              const updatedNoteContent = note.raw.replace(
                 new RegExp(`\\[\\[${sourceName}(\\|[^\\]]+)?\\]\\]`, 'g'),
                 `[[${targetName}$1]]`,
               );
 
-              if (updatedNoteContent !== note.content) {
-                await obsidianService.writeNote(
+              if (updatedNoteContent !== note.raw) {
+                await vaultService.writeNote(
                   normalizedNotePath,
                   updatedNoteContent,
                 );
@@ -142,7 +142,7 @@ export function createCuratorTools(deps: GardenToolsDependencies) {
         reason,
       }) => {
         try {
-          const original = await obsidianService.readNote(originalPath);
+          const original = vaultService.getNote(originalPath);
           if (!original) {
             return `Note not found: ${originalPath}`;
           }
@@ -166,7 +166,7 @@ export function createCuratorTools(deps: GardenToolsDependencies) {
               tags: [],
             });
 
-            await obsidianService.writeNote(notePath, noteContent);
+            await vaultService.writeNote(notePath, noteContent);
             await indexSyncProcessor.queueSingleNote(
               `${notePath}.md`,
               noteContent,
@@ -176,23 +176,29 @@ export function createCuratorTools(deps: GardenToolsDependencies) {
 
           // Handle original note
           if (deleteOriginal) {
-            await obsidianService.deleteNote(originalPath);
+            await vaultService.deleteNote(originalPath);
             await qdrantService.deleteNote(originalPath);
           } else if (updatedOriginal) {
-            const parsed = matter(original.content);
             const newContent = matter.stringify(updatedOriginal, {
-              ...parsed.data,
+              ...original.frontmatter,
               last_tended: tendedAt,
             });
-            await obsidianService.writeNote(originalPath, newContent);
+            await vaultService.writeNote(originalPath, newContent);
             await indexSyncProcessor.queueSingleNote(
               ensureMdExtension(originalPath),
               newContent,
             );
           }
 
+          // Auto-create stub seedlings for broken wikilinks across all new notes
+          const allNewContent = newNotes.map(n => n.content).join('\n\n');
+          const stubResult = await createStubsForBrokenLinks(
+            allNewContent,
+            deps,
+          );
+
           const action = deleteOriginal ? 'Split and deleted' : 'Split';
-          return `${action} "${originalPath}" into: ${createdPaths.join(', ')}. ${reason}`;
+          return `${action} "${originalPath}" into: ${createdPaths.join(', ')}. ${reason}${formatStubResult(stubResult)}`;
         } catch (error) {
           return `Error splitting note: ${error.message}`;
         }
@@ -213,14 +219,13 @@ export function createCuratorTools(deps: GardenToolsDependencies) {
       }),
       execute: async ({ path, newMaturity, reason }) => {
         try {
-          const note = await obsidianService.readNote(path);
+          const note = vaultService.getNote(path);
           if (!note) {
             return `Note not found: ${path}`;
           }
 
-          const parsed = matter(note.content);
           const currentStage =
-            (parsed.data.growth_stage as string) || 'seedling';
+            (note.frontmatter.growth_stage as string) || 'seedling';
 
           // Validate promotion order
           const stageOrder = ['seedling', 'budding', 'evergreen'];
@@ -232,13 +237,13 @@ export function createCuratorTools(deps: GardenToolsDependencies) {
           }
 
           const tendedAt = formatObsidianDate();
-          const newContent = matter.stringify(parsed.content, {
-            ...parsed.data,
+          const newContent = matter.stringify(note.body, {
+            ...note.frontmatter,
             growth_stage: newMaturity,
             last_tended: tendedAt,
           });
 
-          await obsidianService.writeNote(path, newContent);
+          await vaultService.writeNote(path, newContent);
           await indexSyncProcessor.queueSingleNote(
             ensureMdExtension(path),
             newContent,

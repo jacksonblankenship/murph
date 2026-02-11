@@ -6,12 +6,16 @@ import {
 } from '@nestjs/bullmq';
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Interval } from '@nestjs/schedule';
+import { OnEvent } from '@nestjs/event-emitter';
 import { Job, Queue } from 'bullmq';
-import matter from 'gray-matter';
 import { MurLock } from 'murlock';
 import { PinoLogger } from 'nestjs-pino';
-import { ObsidianService } from '../obsidian/obsidian.service';
+import {
+  VaultEvents,
+  type VaultNoteDeletedEvent,
+  type VaultNoteEvent,
+  VaultService,
+} from '../vault';
 import { ChunkingService } from '../vector/chunking.service';
 import { EmbeddingService } from '../vector/embedding.service';
 import {
@@ -20,8 +24,6 @@ import {
   type SummaryUpsertData,
 } from '../vector/qdrant.service';
 
-/** Sync interval in milliseconds (5 minutes) */
-const SYNC_INTERVAL_MS = 300_000;
 /** Milliseconds per second for logging conversion */
 const MS_PER_SECOND = 1000;
 /** Lock timeout in milliseconds for single note indexing */
@@ -46,7 +48,7 @@ export class IndexSyncProcessor extends WorkerHost implements OnModuleInit {
     private readonly logger: PinoLogger,
     @InjectQueue('index-sync')
     private readonly syncQueue: Queue<IndexSyncJob>,
-    private readonly obsidianService: ObsidianService,
+    private readonly vaultService: VaultService,
     private readonly embeddingService: EmbeddingService,
     private readonly qdrantService: QdrantService,
     private readonly chunkingService: ChunkingService,
@@ -64,13 +66,36 @@ export class IndexSyncProcessor extends WorkerHost implements OnModuleInit {
     await this.queueFullSync();
     this.logger.info(
       { intervalSeconds: this.syncIntervalMs / MS_PER_SECOND },
-      'Index sync scheduled via @Interval',
+      'Index sync initialized — event-driven updates active',
     );
   }
 
-  @Interval(SYNC_INTERVAL_MS)
-  async scheduledFullSync(): Promise<void> {
-    await this.queueFullSync();
+  /**
+   * Handles external note changes detected via filesystem watcher.
+   * Automatically re-indexes the note in Qdrant.
+   */
+  @OnEvent(VaultEvents.NOTE_CHANGED)
+  async onNoteChanged(event: VaultNoteEvent): Promise<void> {
+    await this.queueSingleNote(event.path, event.note.raw);
+  }
+
+  /**
+   * Handles new notes detected via filesystem watcher.
+   * Automatically indexes the note in Qdrant.
+   */
+  @OnEvent(VaultEvents.NOTE_CREATED)
+  async onNoteCreated(event: VaultNoteEvent): Promise<void> {
+    await this.queueSingleNote(event.path, event.note.raw);
+  }
+
+  /**
+   * Handles note deletions detected via filesystem watcher.
+   * Automatically removes the note from Qdrant.
+   */
+  @OnEvent(VaultEvents.NOTE_DELETED)
+  async onNoteDeleted(event: VaultNoteDeletedEvent): Promise<void> {
+    await this.qdrantService.deleteDocumentChunks(event.path);
+    this.logger.debug({ path: event.path }, 'Deleted note from index');
   }
 
   async queueFullSync(): Promise<void> {
@@ -100,8 +125,8 @@ export class IndexSyncProcessor extends WorkerHost implements OnModuleInit {
     this.logger.info({}, 'Starting full index sync...');
 
     try {
-      // 1. Get all notes from Obsidian
-      const vaultNotes = await this.obsidianService.getAllNotesWithContent();
+      // 1. Get all notes from in-memory vault
+      const vaultNotes = this.vaultService.getAllNotes();
       const vaultPaths = new Set(vaultNotes.map(n => n.path));
 
       // 2. Get all indexed documents from Qdrant (using document hash)
@@ -115,13 +140,13 @@ export class IndexSyncProcessor extends WorkerHost implements OnModuleInit {
       // 3. Process vault notes (CREATE or UPDATE)
       for (const note of vaultNotes) {
         const existingDoc = indexed.get(note.path);
-        const currentHash = await this.hashContent(note.content);
+        const currentHash = await this.hashContent(note.raw);
 
         if (!existingDoc) {
           // CREATE: New note not in index
           const chunkCount = await this.indexNoteWithChunks(
             note.path,
-            note.content,
+            note.raw,
           );
           if (chunkCount > 0) {
             created++;
@@ -132,7 +157,7 @@ export class IndexSyncProcessor extends WorkerHost implements OnModuleInit {
           await this.qdrantService.deleteDocumentChunks(note.path);
           const chunkCount = await this.indexNoteWithChunks(
             note.path,
-            note.content,
+            note.raw,
           );
           if (chunkCount > 0) {
             updated++;
@@ -163,8 +188,7 @@ export class IndexSyncProcessor extends WorkerHost implements OnModuleInit {
   @MurLock(LOCK_TIMEOUT_MS, 'path')
   private async indexSingleNote(path: string, content?: string): Promise<void> {
     try {
-      const noteContent =
-        content || (await this.obsidianService.readNote(path))?.content;
+      const noteContent = content || this.vaultService.getNote(path)?.raw;
 
       if (!noteContent) {
         this.logger.warn({ path }, 'Note not found or empty, skipping index');
@@ -204,7 +228,7 @@ export class IndexSyncProcessor extends WorkerHost implements OnModuleInit {
     const title = this.extractTitle(path, content);
     const tags = this.extractTags(content);
     const documentHash = await this.hashContent(content);
-    const summary = this.extractSummary(content);
+    const summary = this.extractSummary(path);
 
     // Batch embed all chunks
     const chunkContents = chunks.map(c => c.content);
@@ -242,18 +266,14 @@ export class IndexSyncProcessor extends WorkerHost implements OnModuleInit {
   }
 
   /**
-   * Extracts the summary field from frontmatter.
+   * Extracts the summary from the in-memory Note's frontmatter.
    *
-   * @param content - Full markdown content with frontmatter
+   * @param path - Note path to look up
    * @returns Summary string, or empty string if not present
    */
-  private extractSummary(content: string): string {
-    try {
-      const parsed = matter(content);
-      return (parsed.data.summary as string) || '';
-    } catch {
-      return '';
-    }
+  private extractSummary(path: string): string {
+    const note = this.vaultService.getNote(path);
+    return (note?.frontmatter.summary as string) || '';
   }
 
   private extractTitle(path: string, content: string): string {

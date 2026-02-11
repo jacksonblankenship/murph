@@ -1,5 +1,5 @@
-import type { ObsidianService } from '../../../obsidian/obsidian.service';
 import type { IndexSyncProcessor } from '../../../sync/index-sync.processor';
+import type { VaultService } from '../../../vault';
 import type { EmbeddingService } from '../../../vector/embedding.service';
 import type { QdrantService } from '../../../vector/qdrant.service';
 
@@ -10,7 +10,7 @@ import type { QdrantService } from '../../../vector/qdrant.service';
  * vector search, and synchronization capabilities.
  */
 export interface GardenToolsDependencies {
-  obsidianService: ObsidianService;
+  vaultService: VaultService;
   embeddingService: EmbeddingService;
   qdrantService: QdrantService;
   indexSyncProcessor: IndexSyncProcessor;

@@ -1,8 +1,8 @@
 import type { AppClsService } from '../../common/cls.service';
 import type { ExaService } from '../../exa/exa.service';
-import type { ObsidianService } from '../../obsidian/obsidian.service';
 import type { SchedulerService } from '../../scheduler/scheduler.service';
 import type { IndexSyncProcessor } from '../../sync/index-sync.processor';
+import type { VaultService } from '../../vault';
 import type { EmbeddingService } from '../../vector/embedding.service';
 import type { QdrantService } from '../../vector/qdrant.service';
 
@@ -19,8 +19,8 @@ export interface TypedToolDependencies {
   schedulerService?: SchedulerService;
   /** CLS service for context access */
   clsService?: AppClsService;
-  /** Obsidian vault service */
-  obsidianService?: ObsidianService;
+  /** Vault service for digital garden access */
+  vaultService?: VaultService;
   /** Text embedding service */
   embeddingService?: EmbeddingService;
   /** Qdrant vector database service */

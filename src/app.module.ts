@@ -8,6 +8,8 @@ import { TelegrafModule } from 'nestjs-telegraf';
 import { CacheModule } from './cache/cache.module';
 import { CommonModule } from './common/common.module';
 import { configuration } from './config/configuration';
+import { DispatcherModule } from './dispatcher';
+import { InboundModule } from './inbound';
 import { LoggingModule } from './logging/logging.module';
 import { MessagesModule } from './messages/messages.module';
 import { PromptModule } from './prompts';
@@ -46,6 +48,7 @@ import { TelegramModule } from './transport/telegram/telegram.module';
       inject: [ConfigService],
     }),
     CommonModule,
+    DispatcherModule,
     LoggingModule,
     CacheModule,
     PromptModule,
@@ -57,6 +60,7 @@ import { TelegramModule } from './transport/telegram/telegram.module';
       inject: [ConfigService],
     }),
     TelegramModule,
+    InboundModule,
     SchedulerModule,
     MessagesModule,
     SyncModule,

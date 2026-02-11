@@ -21,6 +21,10 @@ describe('PromptService', () => {
       expect(() => service.get('garden-curator')).not.toThrow();
     });
 
+    test('loads garden-seeder prompt without error', () => {
+      expect(() => service.get('garden-seeder')).not.toThrow();
+    });
+
     test('throws for unknown prompt name', () => {
       expect(() => service.get('nonexistent' as never)).toThrow(
         'Prompt not found: nonexistent',
@@ -35,10 +39,10 @@ describe('PromptService', () => {
       expect(prompt).toContain('Growth Stages');
     });
 
-    test('scheduled-proactive resolves philosophy partials', () => {
+    test('scheduled-proactive renders without partials', () => {
       const prompt = service.get('scheduled-proactive');
-      expect(prompt).toContain('Digital Garden Philosophy');
-      expect(prompt).toContain('Growth Stages');
+      expect(prompt).toContain('SCHEDULED TASK');
+      expect(prompt).toContain('note_something');
     });
 
     test('garden-curator resolves all partial types', () => {
@@ -80,7 +84,7 @@ describe('PromptService', () => {
     test('user-direct contains knowledge capture section', () => {
       const prompt = service.get('user-direct');
       expect(prompt).toContain('Knowledge Capture');
-      expect(prompt).toContain('search_similar');
+      expect(prompt).toContain('note_something');
     });
 
     test('scheduled-proactive mentions scheduled task context', () => {

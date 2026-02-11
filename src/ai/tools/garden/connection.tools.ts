@@ -3,6 +3,7 @@ import matter from 'gray-matter';
 import { z } from 'zod';
 import { formatObsidianDate } from '../../../common/obsidian-date';
 import { MS_PER_DAY, ORPHAN_LIMIT, ORPHAN_MAX_AGE_DAYS } from './constants';
+import { createStubsForBrokenLinks, formatStubResult } from './stub-creator';
 import type { GardenToolsDependencies } from './types';
 
 /**
@@ -11,7 +12,7 @@ import type { GardenToolsDependencies } from './types';
  * Includes: connect, backlinks, orphans
  */
 export function createConnectionTools(deps: GardenToolsDependencies) {
-  const { obsidianService, indexSyncProcessor } = deps;
+  const { vaultService, indexSyncProcessor } = deps;
 
   return {
     connect: tool({
@@ -28,26 +29,29 @@ export function createConnectionTools(deps: GardenToolsDependencies) {
       }),
       execute: async ({ from, to, reason }) => {
         try {
-          const note = await obsidianService.readNote(from);
+          const note = vaultService.getNote(from);
           if (!note) {
             return `Note not found: ${from}`;
           }
 
-          const parsed = matter(note.content);
           const tendedAt = formatObsidianDate();
           const toName = to.replace(/\.md$/, '').split('/').pop();
 
           // Always include reasoning - links should carry meaning
           const linkText = `\n\n${reason} [[${toName}]]`;
 
-          const newContent = matter.stringify(
-            parsed.content.trim() + linkText,
-            { ...parsed.data, last_tended: tendedAt },
-          );
+          const newContent = matter.stringify(note.body.trim() + linkText, {
+            ...note.frontmatter,
+            last_tended: tendedAt,
+          });
 
-          await obsidianService.writeNote(from, newContent);
-          await indexSyncProcessor.queueSingleNote(from, newContent);
-          return `Connected ${from} -> ${toName}`;
+          await vaultService.writeNote(note.path, newContent);
+          await indexSyncProcessor.queueSingleNote(note.path, newContent);
+
+          // Auto-create stub seedlings for any broken wikilinks
+          const stubResult = await createStubsForBrokenLinks(linkText, deps);
+
+          return `Connected ${from} -> ${toName}${formatStubResult(stubResult)}`;
         } catch (error) {
           return `Error connecting notes: ${error.message}`;
         }
@@ -63,18 +67,21 @@ export function createConnectionTools(deps: GardenToolsDependencies) {
       execute: async ({ path }) => {
         try {
           const normalizedPath = path.replace(/\.md$/, '');
+          const backlinkPaths = vaultService.getBacklinks(path);
+
+          if (backlinkPaths.length === 0) {
+            return `No notes link to "${normalizedPath}". This note may need more connections.`;
+          }
+
           const pathName = normalizedPath.split('/').pop();
-
-          const notes = await obsidianService.getAllNotesWithContent();
-          const wikilinkRegex = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
           const backlinks: { path: string; context: string }[] = [];
+          const wikilinkRegex = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
 
-          for (const note of notes) {
-            if (note.path.replace(/\.md$/, '') === normalizedPath) continue;
+          for (const blPath of backlinkPaths) {
+            const note = vaultService.getNote(blPath);
+            if (!note) continue;
 
-            const parsed = matter(note.content);
-            const lines = parsed.content.split('\n');
-
+            const lines = note.body.split('\n');
             for (const line of lines) {
               let match = wikilinkRegex.exec(line);
               while (match !== null) {
@@ -85,14 +92,13 @@ export function createConnectionTools(deps: GardenToolsDependencies) {
                   linkTarget.endsWith(`/${pathName}`)
                 ) {
                   backlinks.push({
-                    path: note.path.replace(/\.md$/, ''),
+                    path: blPath,
                     context: line.trim(),
                   });
                   break;
                 }
                 match = wikilinkRegex.exec(line);
               }
-              // Reset regex lastIndex for next line
               wikilinkRegex.lastIndex = 0;
             }
           }
@@ -143,7 +149,7 @@ export function createConnectionTools(deps: GardenToolsDependencies) {
         limit = ORPHAN_LIMIT,
       }) => {
         try {
-          const notes = await obsidianService.getAllNotesWithContent();
+          const notes = vaultService.getAllNotes();
           if (notes.length === 0) {
             return 'No notes in garden.';
           }
@@ -151,59 +157,20 @@ export function createConnectionTools(deps: GardenToolsDependencies) {
           const now = new Date();
           const cutoffDate = new Date(now.getTime() - maxAgeDays * MS_PER_DAY);
 
-          // Build link graph and collect metadata
-          const wikilinkRegex = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
-          const inboundLinks = new Map<string, Set<string>>();
-          const outboundLinks = new Map<string, Set<string>>();
-          const noteCreatedDates = new Map<string, Date | null>();
-          const validPaths = new Set<string>();
-
-          // Initialize all notes and fetch created dates
-          for (const note of notes) {
-            const normalizedPath = note.path.replace(/\.md$/, '');
-            validPaths.add(normalizedPath);
-            inboundLinks.set(normalizedPath, new Set());
-            outboundLinks.set(normalizedPath, new Set());
-
-            // Use filesystem ctime instead of frontmatter planted date
-            const createdDate = await obsidianService.getCreatedDate(note.path);
-            noteCreatedDates.set(normalizedPath, createdDate);
-          }
-
-          // Extract links
-          for (const note of notes) {
-            const normalizedPath = note.path.replace(/\.md$/, '');
-            const parsed = matter(note.content);
-            const outbound = outboundLinks.get(normalizedPath);
-            if (!outbound) continue;
-
-            let match = wikilinkRegex.exec(parsed.content);
-            while (match !== null) {
-              const linkTarget = match[1];
-              // Find matching path (could be just name or full path)
-              const targetPath = [...validPaths].find(
-                p => p === linkTarget || p.endsWith(`/${linkTarget}`),
-              );
-              if (targetPath) {
-                outbound.add(targetPath);
-                inboundLinks.get(targetPath)?.add(normalizedPath);
-              }
-              match = wikilinkRegex.exec(parsed.content);
-            }
-          }
-
           // Find orphans based on type
           const orphans: { path: string; ageDays: number | null }[] = [];
-          for (const path of validPaths) {
-            const createdDate = noteCreatedDates.get(path);
+
+          for (const note of notes) {
+            const normalizedPath = note.path.replace(/\.md$/, '');
+            const createdDate = note.stat.ctime;
 
             // Skip notes that are too new (unless maxAgeDays is 0)
             if (maxAgeDays > 0 && createdDate && createdDate > cutoffDate) {
               continue;
             }
 
-            const inboundCount = inboundLinks.get(path)?.size ?? 0;
-            const outboundCount = outboundLinks.get(path)?.size ?? 0;
+            const inboundCount = vaultService.getBacklinks(note.path).length;
+            const outboundCount = note.outboundLinks.size;
             const hasInbound = inboundCount > 0;
             const hasOutbound = outboundCount > 0;
 
@@ -225,7 +192,7 @@ export function createConnectionTools(deps: GardenToolsDependencies) {
                     (now.getTime() - createdDate.getTime()) / MS_PER_DAY,
                   )
                 : null;
-              orphans.push({ path, ageDays });
+              orphans.push({ path: normalizedPath, ageDays });
             }
 
             if (orphans.length >= limit) break;

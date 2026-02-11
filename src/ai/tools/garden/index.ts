@@ -34,26 +34,4 @@ export function createGardenTools(deps: GardenToolsDependencies) {
   };
 }
 
-/**
- * Creates a minimal capture-focused tool set for Murph (user-direct chat).
- *
- * Only 6 tools — enough to capture knowledge during conversation
- * without any organizational responsibilities (those belong to the garden tender).
- *
- * Tools: plant, update, recall, read, search_similar, wander
- */
-export function createCaptureTools(deps: GardenToolsDependencies) {
-  const core = createCoreTools(deps);
-  const discovery = createDiscoveryTools(deps);
-
-  return {
-    plant: core.plant,
-    update: core.update,
-    read: core.read,
-    recall: discovery.recall,
-    search_similar: discovery.search_similar,
-    wander: discovery.wander,
-  };
-}
-
 export type { GardenToolsDependencies } from './types';

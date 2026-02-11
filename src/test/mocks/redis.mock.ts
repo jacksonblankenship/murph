@@ -79,6 +79,15 @@ export function createMockRedis() {
       return removed;
     },
 
+    async rpush(key: string, ...values: string[]): Promise<number> {
+      if (!lists.has(key)) {
+        lists.set(key, []);
+      }
+      const list = lists.get(key)!;
+      list.push(...values);
+      return list.length;
+    },
+
     async lpush(key: string, ...values: string[]): Promise<number> {
       if (!lists.has(key)) {
         lists.set(key, []);
@@ -103,6 +112,42 @@ export function createMockRedis() {
         return list.slice(start);
       }
       return list.slice(start, stop + 1);
+    },
+
+    async publish(_channel: string, _message: string): Promise<number> {
+      return 0;
+    },
+
+    pipeline() {
+      const commands: Array<() => Promise<unknown>> = [];
+      const self = {
+        lrange(key: string, start: number, stop: number) {
+          commands.push(async () => {
+            const list = lists.get(key) ?? [];
+            if (stop === -1) return list.slice(start);
+            return list.slice(start, stop + 1);
+          });
+          return self;
+        },
+        del(key: string) {
+          commands.push(async () => {
+            const existed = lists.has(key) || store.has(key);
+            lists.delete(key);
+            store.delete(key);
+            ttls.delete(key);
+            return existed ? 1 : 0;
+          });
+          return self;
+        },
+        async exec(): Promise<Array<[null, unknown]>> {
+          const results: Array<[null, unknown]> = [];
+          for (const cmd of commands) {
+            results.push([null, await cmd()]);
+          }
+          return results;
+        },
+      };
+      return self;
     },
 
     clear() {

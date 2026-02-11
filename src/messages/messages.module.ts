@@ -1,27 +1,25 @@
 import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
 import { BullBoardModule } from '@bull-board/nestjs';
-import { BullModule } from '@nestjs/bullmq';
-import { Module } from '@nestjs/common';
+import { BullModule, InjectQueue } from '@nestjs/bullmq';
+import { Module, OnModuleInit } from '@nestjs/common';
+import { Queue } from 'bullmq';
 import { AiModule } from '../ai/ai.module';
 import { ChannelModule } from '../channels/channel.module';
+import { AgentDispatcher } from '../dispatcher';
 import { MemoryModule } from '../memory/memory.module';
 import { RedisModule } from '../redis/redis.module';
-import { TelegramModule } from '../transport/telegram/telegram.module';
-import { MessageOrchestrator } from './message.orchestrator';
+import { BroadcastModule } from '../transport/telegram/broadcast.module';
 import { MessagesService } from './messages.service';
 import { ScheduledMessageProcessor } from './scheduled-message.processor';
-import { ScheduledTaskHandler } from './scheduled-task.handler';
 
 /**
  * Handles message processing and LLM orchestration.
  *
- * Communication with other modules via EventEmitter:
- * - Listens for USER_MESSAGE to process user messages
- * - Listens for SCHEDULED_TASK_TRIGGERED to queue scheduled messages
- * - Emits MESSAGE_BROADCAST to send responses
- *
  * Uses BullMQ for:
  * - scheduled-messages: Persistent queue for scheduled task LLM processing
+ *
+ * The scheduled-messages queue is registered with AgentDispatcher on init
+ * so TaskProcessor can dispatch directly without EventEmitter bridging.
  */
 @Module({
   imports: [
@@ -29,7 +27,7 @@ import { ScheduledTaskHandler } from './scheduled-task.handler';
     MemoryModule,
     AiModule,
     ChannelModule,
-    TelegramModule,
+    BroadcastModule,
     BullModule.registerQueue({
       name: 'scheduled-messages',
       defaultJobOptions: {
@@ -52,12 +50,20 @@ import { ScheduledTaskHandler } from './scheduled-task.handler';
       adapter: BullMQAdapter,
     }),
   ],
-  providers: [
-    MessagesService,
-    MessageOrchestrator,
-    ScheduledMessageProcessor,
-    ScheduledTaskHandler,
-  ],
+  providers: [MessagesService, ScheduledMessageProcessor],
   exports: [MessagesService],
 })
-export class MessagesModule {}
+export class MessagesModule implements OnModuleInit {
+  constructor(
+    @InjectQueue('scheduled-messages')
+    private readonly scheduledMessagesQueue: Queue,
+    private readonly dispatcher: AgentDispatcher,
+  ) {}
+
+  onModuleInit(): void {
+    this.dispatcher.registerQueue(
+      'scheduled-messages',
+      this.scheduledMessagesQueue,
+    );
+  }
+}

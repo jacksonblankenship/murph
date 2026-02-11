@@ -22,11 +22,10 @@ export const configuration = () => ({
       10,
     ),
   },
-  obsidian: {
-    apiUrl: process.env.OBSIDIAN_API_URL || 'http://localhost:27123',
-    apiKey: process.env.OBSIDIAN_API_KEY,
+  vault: {
+    path: process.env.VAULT_PATH || './vault',
     excludePatterns: (
-      process.env.OBSIDIAN_EXCLUDE_PATTERNS ||
+      process.env.VAULT_EXCLUDE_PATTERNS ||
       '.obsidian,Templates,*.sync-conflict-*'
     ).split(','),
   },

@@ -1,10 +1,9 @@
 import { OnModuleInit } from '@nestjs/common';
-import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PinoLogger } from 'nestjs-pino';
 import { Command, Help, InjectBot, On, Start, Update } from 'nestjs-telegraf';
 import { type Context, Telegraf } from 'telegraf';
 import { BOT_MESSAGES } from '../../common/constants';
-import { Events, type UserMessageEvent } from '../../common/events';
+import { InboundService } from '../../inbound';
 import { ConversationService } from '../../memory/conversation.service';
 import { GardenTenderProcessor } from '../../sync/garden-tender.processor';
 import { TranscriptionService } from '../../transcription';
@@ -16,7 +15,7 @@ export class TelegramUpdate implements OnModuleInit {
     private readonly logger: PinoLogger,
     @InjectBot() private readonly bot: Telegraf<Context>,
     private readonly conversationService: ConversationService,
-    private readonly eventEmitter: EventEmitter2,
+    private readonly inboundService: InboundService,
     private readonly gardenTenderProcessor: GardenTenderProcessor,
     private readonly transcriptionService: TranscriptionService,
     private readonly userProfileService: UserProfileService,
@@ -143,17 +142,16 @@ export class TelegramUpdate implements OnModuleInit {
       // Send typing indicator immediately
       await ctx.sendChatAction('typing');
 
-      // Emit user message event for processing
-      const event: UserMessageEvent = {
+      // Enqueue for debounced processing
+      await this.inboundService.enqueue({
         userId: ctx.from.id,
+        chatId: ctx.chat.id,
         text: userMessage,
         messageId: ctx.message.message_id,
-        chatId: ctx.chat.id,
-      };
-
-      this.eventEmitter.emit(Events.USER_MESSAGE, event);
+        source: 'telegram',
+      });
     } catch (error) {
-      this.logger.error({ err: error }, 'Error emitting message event');
+      this.logger.error({ err: error }, 'Error enqueuing message');
       await ctx.reply('Sorry, I encountered an error processing your message.');
     }
   }
@@ -209,15 +207,14 @@ export class TelegramUpdate implements OnModuleInit {
         'Voice message transcribed',
       );
 
-      // Emit as regular user message for processing
-      const event: UserMessageEvent = {
+      // Enqueue transcribed text for debounced processing
+      await this.inboundService.enqueue({
         userId: ctx.from.id,
+        chatId: ctx.chat.id,
         text: result.text,
         messageId: ctx.message.message_id,
-        chatId: ctx.chat.id,
-      };
-
-      this.eventEmitter.emit(Events.USER_MESSAGE, event);
+        source: 'telegram',
+      });
     } catch (error) {
       this.logger.error({ err: error }, 'Error processing voice message');
       await ctx.reply(

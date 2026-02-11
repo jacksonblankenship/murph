@@ -3,6 +3,7 @@ import matter from 'gray-matter';
 import { z } from 'zod';
 import { formatObsidianDate } from '../../../common/obsidian-date';
 import { BROKEN_LINKS_LIMIT, PREVIEW_LENGTH_SHORT } from './constants';
+import { createStubsForBrokenLinks, formatStubResult } from './stub-creator';
 import type { GardenToolsDependencies } from './types';
 import { ensureMdExtension, sanitizePath } from './utils';
 
@@ -12,7 +13,7 @@ import { ensureMdExtension, sanitizePath } from './utils';
  * Includes: disconnect, broken_links, supersede
  */
 export function createLinkHygieneTools(deps: GardenToolsDependencies) {
-  const { obsidianService, indexSyncProcessor } = deps;
+  const { vaultService, indexSyncProcessor } = deps;
 
   return {
     disconnect: tool({
@@ -26,12 +27,11 @@ export function createLinkHygieneTools(deps: GardenToolsDependencies) {
       }),
       execute: async ({ from, to }) => {
         try {
-          const note = await obsidianService.readNote(from);
+          const note = vaultService.getNote(from);
           if (!note) {
             return `Note not found: ${from}`;
           }
 
-          const parsed = matter(note.content);
           const toName = to.replace(/\.md$/, '').split('/').pop();
 
           // Remove [[to]] and [[to|alias]] patterns
@@ -43,7 +43,7 @@ export function createLinkHygieneTools(deps: GardenToolsDependencies) {
             ),
           ];
 
-          let updatedContent = parsed.content;
+          let updatedContent = note.body;
           let removed = false;
 
           for (const pattern of linkPatterns) {
@@ -59,11 +59,11 @@ export function createLinkHygieneTools(deps: GardenToolsDependencies) {
 
           const tendedAt = formatObsidianDate();
           const newContent = matter.stringify(updatedContent, {
-            ...parsed.data,
+            ...note.frontmatter,
             last_tended: tendedAt,
           });
 
-          await obsidianService.writeNote(from, newContent);
+          await vaultService.writeNote(from, newContent);
           await indexSyncProcessor.queueSingleNote(
             ensureMdExtension(from),
             newContent,
@@ -88,7 +88,7 @@ export function createLinkHygieneTools(deps: GardenToolsDependencies) {
       }),
       execute: async ({ limit = BROKEN_LINKS_LIMIT }) => {
         try {
-          const notes = await obsidianService.getAllNotesWithContent();
+          const notes = vaultService.getAllNotes();
           if (notes.length === 0) {
             return 'No notes in garden.';
           }
@@ -102,8 +102,7 @@ export function createLinkHygieneTools(deps: GardenToolsDependencies) {
             validNames.add(normalizedPath.split('/').pop() || '');
           }
 
-          // Find broken links
-          const wikilinkRegex = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
+          // Find broken links using pre-computed outboundLinks
           const brokenLinks: {
             notePath: string;
             brokenLink: string;
@@ -112,33 +111,28 @@ export function createLinkHygieneTools(deps: GardenToolsDependencies) {
 
           for (const note of notes) {
             const normalizedPath = note.path.replace(/\.md$/, '');
-            const parsed = matter(note.content);
-            const lines = parsed.content.split('\n');
 
-            for (const line of lines) {
-              let match = wikilinkRegex.exec(line);
-              while (match !== null) {
-                const linkTarget = match[1];
+            for (const linkTarget of note.outboundLinks) {
+              // Check if link target exists
+              const exists =
+                validPaths.has(linkTarget) ||
+                validNames.has(linkTarget) ||
+                [...validPaths].some(p => p.endsWith(`/${linkTarget}`));
 
-                // Check if link target exists
-                const exists =
-                  validPaths.has(linkTarget) ||
-                  validNames.has(linkTarget) ||
-                  [...validPaths].some(p => p.endsWith(`/${linkTarget}`));
+              if (!exists) {
+                // Find context line containing the broken link
+                const lines = note.body.split('\n');
+                const contextLine =
+                  lines.find(l => l.includes(`[[${linkTarget}`)) || '';
 
-                if (!exists) {
-                  brokenLinks.push({
-                    notePath: normalizedPath,
-                    brokenLink: linkTarget,
-                    context: line.trim().slice(0, PREVIEW_LENGTH_SHORT),
-                  });
+                brokenLinks.push({
+                  notePath: normalizedPath,
+                  brokenLink: linkTarget,
+                  context: contextLine.trim().slice(0, PREVIEW_LENGTH_SHORT),
+                });
 
-                  if (brokenLinks.length >= limit) break;
-                }
-                match = wikilinkRegex.exec(line);
+                if (brokenLinks.length >= limit) break;
               }
-              wikilinkRegex.lastIndex = 0;
-              if (brokenLinks.length >= limit) break;
             }
             if (brokenLinks.length >= limit) break;
           }
@@ -188,13 +182,12 @@ export function createLinkHygieneTools(deps: GardenToolsDependencies) {
       }),
       execute: async ({ oldPath, newTitle, newContent, reason, folder }) => {
         try {
-          const oldNote = await obsidianService.readNote(oldPath);
+          const oldNote = vaultService.getNote(oldPath);
           if (!oldNote) {
             return `Note not found: ${oldPath}. Cannot supersede a non-existent note.`;
           }
 
           const today = formatObsidianDate();
-          const parsed = matter(oldNote.content);
 
           // Determine new note path
           const sanitizedTitle = sanitizePath(newTitle);
@@ -207,7 +200,7 @@ export function createLinkHygieneTools(deps: GardenToolsDependencies) {
             : sanitizedTitle;
 
           // Check if new path already exists
-          const existingNew = await obsidianService.readNote(newPath);
+          const existingNew = vaultService.getNote(newPath);
           if (existingNew) {
             return `Note already exists at "${newPath}". Choose a different title or update the existing note.`;
           }
@@ -224,7 +217,7 @@ export function createLinkHygieneTools(deps: GardenToolsDependencies) {
             tags: [],
           });
 
-          await obsidianService.writeNote(newPath, newNoteContent);
+          await vaultService.writeNote(newPath, newNoteContent);
           await indexSyncProcessor.queueSingleNote(newPath, newNoteContent);
 
           // Update the old note with superseded marker in body only
@@ -233,17 +226,20 @@ export function createLinkHygieneTools(deps: GardenToolsDependencies) {
             : `> **Superseded:** This note has been superseded by [[${sanitizedTitle}]].\n\n`;
 
           const updatedOldContent = matter.stringify(
-            supersessionNotice + parsed.content.trim(),
+            supersessionNotice + oldNote.body.trim(),
             {
-              ...parsed.data,
+              ...oldNote.frontmatter,
               last_tended: today,
             },
           );
 
-          await obsidianService.writeNote(oldPath, updatedOldContent);
+          await vaultService.writeNote(oldPath, updatedOldContent);
           await indexSyncProcessor.queueSingleNote(oldPath, updatedOldContent);
 
-          return `Superseded "${oldPath}" with "${newPath}".\n\nThe old note now links to the new one and is marked as superseded. Both notes remain in the garden — the old one as historical context.`;
+          // Auto-create stub seedlings for any broken wikilinks in the new content
+          const stubResult = await createStubsForBrokenLinks(newContent, deps);
+
+          return `Superseded "${oldPath}" with "${newPath}".\n\nThe old note now links to the new one and is marked as superseded. Both notes remain in the garden — the old one as historical context.${formatStubResult(stubResult)}`;
         } catch (error) {
           return `Error superseding note: ${error.message}`;
         }

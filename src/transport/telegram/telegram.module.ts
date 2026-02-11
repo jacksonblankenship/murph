@@ -1,19 +1,17 @@
 import { Module } from '@nestjs/common';
 import { TelegrafModule } from 'nestjs-telegraf';
+import { InboundModule } from '../../inbound';
 import { MemoryModule } from '../../memory/memory.module';
 import { SyncModule } from '../../sync/sync.module';
 import { TranscriptionModule } from '../../transcription';
 import { UserProfileModule } from '../../user-profile';
-import { BroadcastHandler } from './broadcast.handler';
-import { BroadcastService } from './broadcast.service';
 import { TelegramUpdate } from './telegram.update';
 
 /**
  * Handles Telegram bot interactions.
  *
- * Communication with other modules via EventEmitter:
- * - Emits USER_MESSAGE when a message arrives (text or transcribed voice)
- * - Listens for MESSAGE_BROADCAST to send responses
+ * - Enqueues inbound messages via InboundService for debounced processing
+ * - Outbound broadcasting lives in BroadcastModule (no circular dependency)
  */
 @Module({
   imports: [
@@ -22,8 +20,8 @@ import { TelegramUpdate } from './telegram.update';
     SyncModule,
     TranscriptionModule,
     UserProfileModule,
+    InboundModule,
   ],
-  providers: [TelegramUpdate, BroadcastService, BroadcastHandler],
-  exports: [BroadcastService],
+  providers: [TelegramUpdate],
 })
 export class TelegramModule {}

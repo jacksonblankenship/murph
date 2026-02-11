@@ -6,7 +6,7 @@ import type { ChannelConfig } from '../channel.types';
 import { HistoryEnricher } from '../enrichers/history.enricher';
 import { TimeEnricher } from '../enrichers/time.enricher';
 import { TelegramOutput } from '../outputs/telegram.output';
-import { GardenToolFactory } from '../tools/garden.factory';
+import { SeedToolFactory } from '../tools/seed.factory';
 import { TimeToolFactory } from '../tools/time.factory';
 import { WebSearchToolFactory } from '../tools/web-search.factory';
 import { ProactiveTransformer } from '../transformers/proactive.transformer';
@@ -22,7 +22,7 @@ export const SCHEDULED_PROACTIVE_CHANNEL_ID = 'scheduled-proactive';
  * Features:
  * - Proactive transformer (reframes message for outreach)
  * - Hybrid context enrichment (conversation history + long-term memory)
- * - Tools: time, memory, web search (no scheduling - tasks can't schedule more tasks)
+ * - Tools: time, seed, web search (no scheduling - tasks can't schedule more tasks)
  * - Telegram output
  */
 @Injectable()
@@ -34,7 +34,7 @@ export class ScheduledPreset implements OnModuleInit {
     private readonly historyEnricher: HistoryEnricher,
     private readonly timeEnricher: TimeEnricher,
     private readonly timeToolFactory: TimeToolFactory,
-    private readonly gardenToolFactory: GardenToolFactory,
+    private readonly seedToolFactory: SeedToolFactory,
     private readonly webSearchToolFactory: WebSearchToolFactory,
     private readonly telegramOutput: TelegramOutput,
   ) {}
@@ -50,7 +50,7 @@ export class ScheduledPreset implements OnModuleInit {
       .addEnricher(this.historyEnricher)
       .addEnricher(this.timeEnricher)
       .addTools(this.timeToolFactory)
-      .addTools(this.gardenToolFactory)
+      .addTools(this.seedToolFactory)
       .addTools(this.webSearchToolFactory)
       .addOutput(this.telegramOutput)
       .build();
