@@ -34,6 +34,16 @@
   },
   "overrides": [
     {
+      "includes": ["lint-staged.config.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noDefaultExport": "off"
+          }
+        }
+      }
+    },
+    {
       "includes": ["**/*.test.ts", "**/test/**"],
       "linter": {
         "rules": {
