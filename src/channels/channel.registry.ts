@@ -1,5 +1,4 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
-import { ModuleRef } from '@nestjs/core';
 import { PinoLogger } from 'nestjs-pino';
 import type { ChannelConfig } from './channel.types';
 
@@ -28,10 +27,7 @@ export interface ChannelPreset {
 export class ChannelRegistry implements OnModuleInit {
   private readonly channels = new Map<string, ChannelConfig>();
 
-  constructor(
-    private readonly logger: PinoLogger,
-    private readonly moduleRef: ModuleRef,
-  ) {
+  constructor(private readonly logger: PinoLogger) {
     this.logger.setContext(ChannelRegistry.name);
   }
 

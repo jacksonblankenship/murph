@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import { createMockLogger } from '../test/mocks/pino-logger.mock';
-import { ChannelRegistry } from './channel.registry';
 import type {
   ChannelConfig,
   ContextEnricher,

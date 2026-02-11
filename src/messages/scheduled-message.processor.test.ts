@@ -45,7 +45,7 @@ describe('ScheduledMessageProcessor', () => {
     };
     mockBroadcastService = {
       // Execute the function passed to withTypingIndicator immediately
-      withTypingIndicator: mock((chatId: number, fn: () => Promise<unknown>) =>
+      withTypingIndicator: mock((_chatId: number, fn: () => Promise<unknown>) =>
         fn(),
       ),
     };

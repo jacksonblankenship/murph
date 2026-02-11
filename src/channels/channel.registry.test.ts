@@ -16,7 +16,7 @@ describe('ChannelRegistry', () => {
   });
 
   beforeEach(() => {
-    registry = new ChannelRegistry(createMockLogger(), null as never);
+    registry = new ChannelRegistry(createMockLogger());
   });
 
   describe('register', () => {

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import type { UserProfileService } from '../../user-profile';
 import type { EnrichmentRequest } from '../channel.types';
 import { TimeEnricher } from './time.enricher';
