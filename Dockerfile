@@ -20,7 +20,6 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY package.json ./
 
-USER bun
 EXPOSE 3000
 
 CMD ["bun", "run", "start"]
