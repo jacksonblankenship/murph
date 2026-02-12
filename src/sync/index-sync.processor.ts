@@ -34,7 +34,7 @@ const HEX_RADIX = 16;
 const BYTE_PAD_LENGTH = 2;
 
 interface IndexSyncJob {
-  type: 'full-sync' | 'single-note';
+  type: 'full-sync' | 'single-note' | 'delete';
   path?: string;
   content?: string;
 }
@@ -90,12 +90,12 @@ export class IndexSyncProcessor extends WorkerHost implements OnModuleInit {
 
   /**
    * Handles note deletions detected via filesystem watcher.
-   * Automatically removes the note from Qdrant.
+   * Queues a delete job to remove the note from Qdrant.
    */
   @OnEvent(VaultEvents.NOTE_DELETED)
   async onNoteDeleted(event: VaultNoteDeletedEvent): Promise<void> {
-    await this.qdrantService.deleteDocumentChunks(event.path);
-    this.logger.debug({ path: event.path }, 'Deleted note from index');
+    await this.syncQueue.add('delete', { type: 'delete', path: event.path });
+    this.logger.debug({ path: event.path }, 'Queued note deletion from index');
   }
 
   async queueFullSync(): Promise<void> {
@@ -118,6 +118,9 @@ export class IndexSyncProcessor extends WorkerHost implements OnModuleInit {
       await this.performFullSync();
     } else if (type === 'single-note' && job.data.path) {
       await this.indexSingleNote(job.data.path, job.data.content);
+    } else if (type === 'delete' && job.data.path) {
+      await this.qdrantService.deleteDocumentChunks(job.data.path);
+      this.logger.debug({ path: job.data.path }, 'Deleted note from index');
     }
   }
 

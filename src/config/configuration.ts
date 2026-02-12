@@ -5,8 +5,18 @@ export const configuration = () => ({
   anthropic: {
     apiKey: process.env.ANTHROPIC_API_KEY,
   },
-  openai: {
-    apiKey: process.env.OPENAI_API_KEY,
+  elevenlabs: {
+    apiKey: process.env.ELEVENLABS_API_KEY,
+  },
+  twilio: {
+    accountSid: process.env.TWILIO_ACCOUNT_SID,
+    authToken: process.env.TWILIO_AUTH_TOKEN,
+    phoneNumber: process.env.TWILIO_PHONE_NUMBER,
+  },
+  voice: {
+    serverUrl: process.env.VOICE_SERVER_URL,
+    userId: Number.parseInt(process.env.VOICE_USER_ID || '0', 10),
+    userPhone: process.env.VOICE_USER_PHONE,
   },
   redis: {
     host: process.env.REDIS_HOST || 'localhost',

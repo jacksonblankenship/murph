@@ -15,6 +15,7 @@ import {
   normalizeTimestamp,
   ScheduledTask,
   ScheduledTaskSchema,
+  TaskAction,
   TaskType,
 } from './task.schemas';
 
@@ -85,6 +86,7 @@ export class SchedulerService implements OnModuleInit {
         type: isOneTime ? TaskType.ONE_TIME : TaskType.RECURRING,
         description,
         message,
+        action: TaskAction.MESSAGE,
         scheduledTime: isOneTime
           ? normalizeTimestamp(options.scheduledTime)
           : undefined,

@@ -1,11 +1,9 @@
 import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
-import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Job } from 'bullmq';
 import { PinoLogger } from 'nestjs-pino';
-import { Events, type MessageBroadcastEvent } from '../common/events';
 import { AgentDispatcher } from '../dispatcher';
 import { RedisService } from '../redis/redis.service';
-import { ScheduledTask, TaskType } from './task.schemas';
+import { ScheduledTask, TaskAction, TaskType } from './task.schemas';
 
 /** Preview length for logging prompts */
 const LOG_PREVIEW_LENGTH = 100;
@@ -17,7 +15,6 @@ export class TaskProcessor extends WorkerHost {
   constructor(
     private readonly logger: PinoLogger,
     private readonly redisService: RedisService,
-    private readonly eventEmitter: EventEmitter2,
     private readonly dispatcher: AgentDispatcher,
   ) {
     super();
@@ -45,24 +42,45 @@ export class TaskProcessor extends WorkerHost {
     }
 
     try {
-      // Dispatch directly to the scheduled-messages queue
-      await this.dispatcher.dispatch({
-        queue: 'scheduled-messages',
-        jobName: 'process-scheduled-message',
-        data: {
-          userId: task.userId,
-          content: task.message,
-          taskId: task.id,
-          timestamp: Date.now(),
-        },
-        jobOptions: {
-          jobId: `scheduled-${task.id}-${Date.now()}`,
-        },
-      });
-      this.logger.info(
-        { taskId: task.id },
-        'Dispatched scheduled task to queue',
-      );
+      const action = task.action ?? TaskAction.MESSAGE;
+
+      if (action === TaskAction.CALL) {
+        // Dispatch to voice-calls queue for outbound call
+        await this.dispatcher.dispatch({
+          queue: 'voice-calls',
+          jobName: 'outbound-call',
+          data: {
+            userId: task.userId,
+            context: task.message,
+          },
+          jobOptions: {
+            jobId: `scheduled-call-${task.id}-${Date.now()}`,
+          },
+        });
+        this.logger.info(
+          { taskId: task.id },
+          'Dispatched scheduled call to voice queue',
+        );
+      } else {
+        // Dispatch to scheduled-messages queue (default)
+        await this.dispatcher.dispatch({
+          queue: 'scheduled-messages',
+          jobName: 'process-scheduled-message',
+          data: {
+            userId: task.userId,
+            content: task.message,
+            taskId: task.id,
+            timestamp: Date.now(),
+          },
+          jobOptions: {
+            jobId: `scheduled-${task.id}-${Date.now()}`,
+          },
+        });
+        this.logger.info(
+          { taskId: task.id },
+          'Dispatched scheduled task to queue',
+        );
+      }
 
       // Update last executed time
       const redis = this.redisService.getClient();
@@ -92,13 +110,24 @@ export class TaskProcessor extends WorkerHost {
       );
       await this.logExecution(task.id, 'error', error.message);
 
-      // Notify user of the failure via event
-      const errorEvent: MessageBroadcastEvent = {
-        userId: task.userId,
-        content: `⚠️ Scheduled Task Failed\n\nTask ID: ${task.id}\nError: ${error.message}\n\nPlease try rescheduling or contact support if this persists.`,
-      };
-      this.eventEmitter.emit(Events.MESSAGE_BROADCAST, errorEvent);
-      this.logger.info({ userId: task.userId }, 'Emitted failure notification');
+      // Notify user of the failure via scheduled-messages queue
+      await this.dispatcher.dispatch({
+        queue: 'scheduled-messages',
+        jobName: 'process-scheduled-message',
+        data: {
+          userId: task.userId,
+          content: `A scheduled task failed. Task: "${task.description}" (ID: ${task.id}). Error: ${error.message}. Let the user know what happened and suggest next steps.`,
+          taskId: task.id,
+          timestamp: Date.now(),
+        },
+        jobOptions: {
+          jobId: `scheduled-error-${task.id}-${Date.now()}`,
+        },
+      });
+      this.logger.info(
+        { userId: task.userId },
+        'Dispatched failure notification',
+      );
 
       throw error; // Let BullMQ handle retries
     }

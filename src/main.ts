@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { WsAdapter } from '@nestjs/platform-ws';
 import { Logger as PinoLogger } from 'nestjs-pino';
 import { AppModule } from './app.module';
 
@@ -11,6 +12,9 @@ async function bootstrap() {
 
   // Use pino logger for all NestJS logs
   app.useLogger(app.get(PinoLogger));
+
+  // Use raw ws adapter for WebSocket (ConversationRelay)
+  app.useWebSocketAdapter(new WsAdapter(app));
 
   const logger = new Logger('Bootstrap');
 

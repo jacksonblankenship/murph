@@ -22,7 +22,7 @@ describe('GardenSeederProcessor', () => {
           messages: [],
           finishReason: 'stop',
           stepCount: 1,
-          toolCallCount: 0,
+          totalToolCallCount: 0,
         }),
       ),
     };

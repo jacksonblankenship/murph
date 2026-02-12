@@ -5,12 +5,19 @@ export enum TaskType {
   RECURRING = 'recurring',
 }
 
+export enum TaskAction {
+  MESSAGE = 'message',
+  CALL = 'call',
+}
+
 export const ScheduledTaskSchema = z.object({
   id: z.string(),
   userId: z.number(),
   type: z.nativeEnum(TaskType),
   description: z.string(),
   message: z.string(),
+  /** Action to perform when the task fires. Defaults to 'message' for backward compatibility. */
+  action: z.nativeEnum(TaskAction).optional().default(TaskAction.MESSAGE),
   scheduledTime: z.number().optional(),
   cronExpression: z.string().optional(),
   createdAt: z.number(),

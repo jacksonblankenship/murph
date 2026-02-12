@@ -6,11 +6,9 @@ describe('TranscriptionService', () => {
   let service: TranscriptionService;
   let mockConfigService: { get: ReturnType<typeof mock> };
   let mockCache: { get: ReturnType<typeof mock>; set: ReturnType<typeof mock> };
-  let mockOpenAIClient: {
-    audio: {
-      transcriptions: {
-        create: ReturnType<typeof mock>;
-      };
+  let mockElevenLabsClient: {
+    speechToText: {
+      convert: ReturnType<typeof mock>;
     };
   };
 
@@ -23,7 +21,7 @@ describe('TranscriptionService', () => {
   beforeEach(() => {
     mockConfigService = {
       get: mock((key: string) => {
-        if (key === 'OPENAI_API_KEY') return 'test-api-key';
+        if (key === 'elevenlabs.apiKey') return 'test-api-key';
         return undefined;
       }),
     };
@@ -31,13 +29,11 @@ describe('TranscriptionService', () => {
       get: mock(() => Promise.resolve(null)),
       set: mock(() => Promise.resolve()),
     };
-    mockOpenAIClient = {
-      audio: {
-        transcriptions: {
-          create: mock(() =>
-            Promise.resolve({ text: 'Hello, this is a test transcription.' }),
-          ),
-        },
+    mockElevenLabsClient = {
+      speechToText: {
+        convert: mock(() =>
+          Promise.resolve({ text: 'Hello, this is a test transcription.' }),
+        ),
       },
     };
 
@@ -47,9 +43,9 @@ describe('TranscriptionService', () => {
       mockCache as never,
     );
 
-    // Inject mock OpenAI client
-    (service as unknown as { client: typeof mockOpenAIClient }).client =
-      mockOpenAIClient;
+    // Inject mock ElevenLabs client
+    (service as unknown as { client: typeof mockElevenLabsClient }).client =
+      mockElevenLabsClient;
   });
 
   describe('transcribe', () => {
@@ -61,19 +57,17 @@ describe('TranscriptionService', () => {
 
       expect(result.success).toBe(true);
       expect(result.text).toBe(cachedText);
-      expect(
-        mockOpenAIClient.audio.transcriptions.create,
-      ).not.toHaveBeenCalled();
+      expect(mockElevenLabsClient.speechToText.convert).not.toHaveBeenCalled();
     });
 
-    test('calls Whisper API with correct parameters', async () => {
+    test('calls Scribe v2 API with correct parameters', async () => {
       await service.transcribe(testAudioBuffer, testMetadata);
 
-      expect(
-        mockOpenAIClient.audio.transcriptions.create,
-      ).toHaveBeenCalledTimes(1);
-      const call = mockOpenAIClient.audio.transcriptions.create.mock.calls[0];
-      expect(call[0].model).toBe('whisper-1');
+      expect(mockElevenLabsClient.speechToText.convert).toHaveBeenCalledTimes(
+        1,
+      );
+      const call = mockElevenLabsClient.speechToText.convert.mock.calls[0];
+      expect(call[0].modelId).toBe('scribe_v2');
       expect(call[0].file).toBeInstanceOf(File);
       expect(call[0].file.name).toBe('voice.ogg');
     });
@@ -85,12 +79,11 @@ describe('TranscriptionService', () => {
       const setCall = mockCache.set.mock.calls[0];
       expect(setCall[0]).toBe('transcription:unique-123');
       expect(setCall[1]).toBe('Hello, this is a test transcription.');
-      expect(setCall[2]).toBe(86400000); // 24 hour TTL
+      expect(setCall[2]).toBe(86_400_000); // 24 hour TTL
     });
 
     test('returns error when API key is not configured', async () => {
       mockConfigService.get = mock(() => undefined);
-      // Recreate service without API key
       service = new TranscriptionService(
         createMockLogger(),
         mockConfigService as never,
@@ -108,13 +101,11 @@ describe('TranscriptionService', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toBe('Empty audio file');
-      expect(
-        mockOpenAIClient.audio.transcriptions.create,
-      ).not.toHaveBeenCalled();
+      expect(mockElevenLabsClient.speechToText.convert).not.toHaveBeenCalled();
     });
 
-    test('returns error when Whisper returns empty text', async () => {
-      mockOpenAIClient.audio.transcriptions.create = mock(() =>
+    test('returns error when Scribe returns empty text', async () => {
+      mockElevenLabsClient.speechToText.convert = mock(() =>
         Promise.resolve({ text: '   ' }),
       );
 
@@ -125,26 +116,8 @@ describe('TranscriptionService', () => {
       expect(mockCache.set).not.toHaveBeenCalled();
     });
 
-    test('handles OpenAI API errors', async () => {
-      const apiError = new Error('API Error') as Error & { status: number };
-      apiError.status = 429;
-      // Simulate OpenAI APIError structure
-      Object.defineProperty(apiError, 'constructor', {
-        value: { name: 'APIError' },
-      });
-
-      mockOpenAIClient.audio.transcriptions.create = mock(() =>
-        Promise.reject(apiError),
-      );
-
-      const result = await service.transcribe(testAudioBuffer, testMetadata);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe('Transcription failed');
-    });
-
     test('handles generic errors', async () => {
-      mockOpenAIClient.audio.transcriptions.create = mock(() =>
+      mockElevenLabsClient.speechToText.convert = mock(() =>
         Promise.reject(new Error('Network failure')),
       );
 
@@ -155,7 +128,7 @@ describe('TranscriptionService', () => {
     });
 
     test('trims whitespace from transcription', async () => {
-      mockOpenAIClient.audio.transcriptions.create = mock(() =>
+      mockElevenLabsClient.speechToText.convert = mock(() =>
         Promise.resolve({ text: '  Hello world  \n' }),
       );
 

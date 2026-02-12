@@ -11,13 +11,15 @@ export type PromptName =
   | 'user-direct'
   | 'scheduled-proactive'
   | 'garden-curator'
-  | 'garden-seeder';
+  | 'garden-seeder'
+  | 'voice';
 
 const PROMPT_NAMES: PromptName[] = [
   'user-direct',
   'scheduled-proactive',
   'garden-curator',
   'garden-seeder',
+  'voice',
 ];
 
 interface PromptMetadata {

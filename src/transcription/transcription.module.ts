@@ -3,7 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { TranscriptionService } from './transcription.service';
 
 /**
- * Module providing audio transcription via OpenAI Whisper.
+ * Module providing audio transcription via ElevenLabs Scribe v2.
  */
 @Module({
   imports: [ConfigModule],

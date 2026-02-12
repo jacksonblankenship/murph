@@ -11,9 +11,9 @@ import { TaskProcessor } from './task.processor';
 /**
  * Handles task scheduling with BullMQ.
  *
- * Communication with other modules via EventEmitter:
- * - Dispatches to 'scheduled-messages' queue via AgentDispatcher
- * - Emits MESSAGE_BROADCAST for error notifications
+ * - Dispatches to 'scheduled-messages' queue via AgentDispatcher for both
+ *   normal task processing and error notifications
+ * - Dispatches to 'voice-calls' queue for scheduled call tasks
  */
 @Module({
   imports: [

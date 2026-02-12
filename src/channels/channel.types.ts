@@ -2,6 +2,18 @@ import type { Tool } from 'ai';
 import type { ConversationMessage } from '../memory/conversation.schemas';
 
 /**
+ * Events emitted by the streaming execution pipeline.
+ *
+ * Used by voice (and future streaming transports) to consume
+ * LLM output token-by-token.
+ */
+export type StreamEvent =
+  | { type: 'text-delta'; delta: string }
+  | { type: 'tool-call'; toolName: string }
+  | { type: 'tool-result'; toolName: string }
+  | { type: 'finish' };
+
+/**
  * Context available during message transformation.
  * Contains metadata about the incoming request.
  */

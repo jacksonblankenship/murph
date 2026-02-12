@@ -1,10 +1,15 @@
+import {
+  ElevenLabsClient,
+  ElevenLabsError,
+  ElevenLabsTimeoutError,
+} from '@elevenlabs/elevenlabs-js';
 import { CACHE_MANAGER, Cache } from '@nestjs/cache-manager';
 import { Inject, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PinoLogger } from 'nestjs-pino';
-import OpenAI from 'openai';
 
-const TRANSCRIPTION_CACHE_TTL = 86400000; // 24 hours in milliseconds
+/** Cache TTL for transcription results (24 hours). */
+const TRANSCRIPTION_CACHE_TTL = 86_400_000;
 
 /**
  * Transcription result returned from the service.
@@ -26,16 +31,16 @@ export interface AudioFileMetadata {
 }
 
 /**
- * Service for transcribing audio using OpenAI Whisper API.
+ * Service for transcribing audio using ElevenLabs Scribe v2.
  *
  * Features:
- * - Transcribes audio buffers to text using Whisper
+ * - Transcribes audio buffers to text using Scribe v2
  * - Caches results by file_unique_id for 24 hours
  * - Returns structured results with success/error states
  */
 @Injectable()
 export class TranscriptionService {
-  private client: OpenAI | null = null;
+  private client: ElevenLabsClient | null = null;
 
   constructor(
     private readonly logger: PinoLogger,
@@ -47,14 +52,14 @@ export class TranscriptionService {
   }
 
   private initializeClient(): void {
-    const apiKey = this.configService.get<string>('OPENAI_API_KEY');
+    const apiKey = this.configService.get<string>('elevenlabs.apiKey');
     if (apiKey) {
-      this.client = new OpenAI({ apiKey });
+      this.client = new ElevenLabsClient({ apiKey });
     }
   }
 
   /**
-   * Transcribes audio to text using OpenAI Whisper.
+   * Transcribes audio to text using ElevenLabs Scribe v2.
    *
    * @param audioBuffer - The audio file as a Buffer
    * @param metadata - File metadata including unique ID for caching
@@ -66,7 +71,6 @@ export class TranscriptionService {
   ): Promise<TranscriptionResult> {
     const cacheKey = `transcription:${metadata.fileUniqueId}`;
 
-    // Check cache first
     const cached = await this.cache.get<string>(cacheKey);
     if (cached) {
       this.logger.debug(
@@ -77,7 +81,7 @@ export class TranscriptionService {
     }
 
     if (!this.client) {
-      this.logger.error('OpenAI client not initialized - missing API key');
+      this.logger.error('ElevenLabs client not initialized - missing API key');
       return {
         success: false,
         error: 'Transcription service not configured',
@@ -92,23 +96,32 @@ export class TranscriptionService {
     }
 
     try {
-      // Convert Buffer to Uint8Array for File constructor compatibility
-      const uint8Array = new Uint8Array(audioBuffer);
-      const file = new File([uint8Array], metadata.filename, {
+      const file = new File([new Uint8Array(audioBuffer)], metadata.filename, {
         type: 'audio/ogg',
       });
 
-      const response = await this.client.audio.transcriptions.create({
+      const response = await this.client.speechToText.convert({
         file,
-        model: 'whisper-1',
+        modelId: 'scribe_v2',
       });
+
+      if (!('text' in response)) {
+        this.logger.warn(
+          { fileUniqueId: metadata.fileUniqueId },
+          'Unexpected multichannel response from Scribe',
+        );
+        return {
+          success: false,
+          error: 'Unexpected transcription response format',
+        };
+      }
 
       const text = response.text.trim();
 
       if (!text) {
         this.logger.warn(
           { fileUniqueId: metadata.fileUniqueId },
-          'Whisper returned empty transcription',
+          'Scribe returned empty transcription',
         );
         return {
           success: false,
@@ -116,7 +129,6 @@ export class TranscriptionService {
         };
       }
 
-      // Cache successful transcription
       await this.cache.set(cacheKey, text, TRANSCRIPTION_CACHE_TTL);
       this.logger.debug(
         { fileUniqueId: metadata.fileUniqueId, textLength: text.length },
@@ -125,12 +137,19 @@ export class TranscriptionService {
 
       return { success: true, text };
     } catch (error) {
-      this.logger.error({ err: error }, 'Whisper transcription failed');
+      this.logger.error({ err: error }, 'Scribe transcription failed');
 
-      if (error instanceof OpenAI.APIError) {
+      if (error instanceof ElevenLabsTimeoutError) {
         return {
           success: false,
-          error: `Transcription API error: ${error.status}`,
+          error: 'Transcription request timed out',
+        };
+      }
+
+      if (error instanceof ElevenLabsError) {
+        return {
+          success: false,
+          error: `Transcription API error: ${error.statusCode}`,
         };
       }
 

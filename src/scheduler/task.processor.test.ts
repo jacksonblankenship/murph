@@ -1,15 +1,13 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { Job } from 'bullmq';
-import { Events } from '../common/events';
 import { createMockLogger } from '../test/mocks/pino-logger.mock';
 import { createMockRedis } from '../test/mocks/redis.mock';
 import { TaskProcessor } from './task.processor';
-import { type ScheduledTask, TaskType } from './task.schemas';
+import { type ScheduledTask, TaskAction, TaskType } from './task.schemas';
 
 describe('TaskProcessor', () => {
   let processor: TaskProcessor;
   let mockRedis: ReturnType<typeof createMockRedis>;
-  let mockEventEmitter: { emit: ReturnType<typeof mock> };
   let mockDispatcher: { dispatch: ReturnType<typeof mock> };
 
   function createMockJob(task: ScheduledTask): Job<ScheduledTask> {
@@ -21,9 +19,6 @@ describe('TaskProcessor', () => {
 
   beforeEach(() => {
     mockRedis = createMockRedis();
-    mockEventEmitter = {
-      emit: mock(() => true),
-    };
     mockDispatcher = {
       dispatch: mock(() => Promise.resolve('dispatched-job-id')),
     };
@@ -35,7 +30,6 @@ describe('TaskProcessor', () => {
     processor = new TaskProcessor(
       createMockLogger(),
       mockRedisService as never,
-      mockEventEmitter as never,
       mockDispatcher as never,
     );
   });
@@ -49,6 +43,7 @@ describe('TaskProcessor', () => {
         description: 'Test task',
         message: 'Hello world',
         scheduledTime: Date.now(),
+        action: TaskAction.MESSAGE,
         createdAt: Date.now(),
         enabled: true,
       };
@@ -84,6 +79,7 @@ describe('TaskProcessor', () => {
         description: 'Test task',
         message: '',
         scheduledTime: Date.now(),
+        action: TaskAction.MESSAGE,
         createdAt: Date.now(),
         enabled: true,
       };
@@ -101,6 +97,7 @@ describe('TaskProcessor', () => {
         description: 'Test task',
         message: '   ',
         scheduledTime: Date.now(),
+        action: TaskAction.MESSAGE,
         createdAt: Date.now(),
         enabled: true,
       };
@@ -118,6 +115,7 @@ describe('TaskProcessor', () => {
         description: 'Test task',
         message: 'Hello',
         cronExpression: '0 9 * * *',
+        action: TaskAction.MESSAGE,
         createdAt: Date.now(),
         enabled: true,
       };
@@ -138,6 +136,7 @@ describe('TaskProcessor', () => {
         description: 'One-time task',
         message: 'Hello',
         scheduledTime: Date.now(),
+        action: TaskAction.MESSAGE,
         createdAt: Date.now(),
         enabled: true,
       };
@@ -164,6 +163,7 @@ describe('TaskProcessor', () => {
         description: 'Recurring task',
         message: 'Hello',
         cronExpression: '0 9 * * *',
+        action: TaskAction.MESSAGE,
         createdAt: Date.now(),
         enabled: true,
       };
@@ -182,6 +182,7 @@ describe('TaskProcessor', () => {
         description: 'Test task',
         message: 'Hello',
         scheduledTime: Date.now(),
+        action: TaskAction.MESSAGE,
         createdAt: Date.now(),
         enabled: true,
       };
@@ -205,6 +206,7 @@ describe('TaskProcessor', () => {
         description: 'Test task',
         message: 'Hello',
         cronExpression: '0 9 * * *',
+        action: TaskAction.MESSAGE,
         createdAt: Date.now(),
         enabled: true,
       };
@@ -218,7 +220,7 @@ describe('TaskProcessor', () => {
       expect(logs.length).toBeLessThanOrEqual(100);
     });
 
-    test('emits MESSAGE_BROADCAST error notification on failure', async () => {
+    test('dispatches error notification to scheduled-messages on failure', async () => {
       const task: ScheduledTask = {
         id: 'task-1',
         userId: 42,
@@ -226,34 +228,49 @@ describe('TaskProcessor', () => {
         description: 'Test task',
         message: 'Hello',
         scheduledTime: Date.now(),
+        action: TaskAction.MESSAGE,
         createdAt: Date.now(),
         enabled: true,
       };
 
-      // Make dispatcher throw to simulate failure
+      // First call throws (the actual task dispatch), second call succeeds (error notification)
+      let callCount = 0;
       mockDispatcher.dispatch = mock(() => {
-        throw new Error('Something went wrong');
+        callCount++;
+        if (callCount === 1) {
+          throw new Error('Something went wrong');
+        }
+        return Promise.resolve('dispatched-job-id');
       });
 
       processor = new TaskProcessor(
         createMockLogger(),
         { getClient: () => mockRedis } as never,
-        mockEventEmitter as never,
         mockDispatcher as never,
       );
 
       await expect(processor.process(createMockJob(task))).rejects.toThrow();
 
-      // Should emit error notification
-      expect(mockEventEmitter.emit).toHaveBeenCalledTimes(1);
-      const [eventName, eventData] = mockEventEmitter.emit.mock.calls[0] as [
-        string,
-        { userId: number; content: string },
-      ];
-      expect(eventName).toBe(Events.MESSAGE_BROADCAST);
-      expect(eventData.userId).toBe(42);
-      expect(eventData.content).toContain('Scheduled Task Failed');
-      expect(eventData.content).toContain('task-1');
+      // Should dispatch error notification (second call)
+      expect(mockDispatcher.dispatch).toHaveBeenCalledTimes(2);
+
+      const errorCall = mockDispatcher.dispatch.mock.calls[1][0] as {
+        queue: string;
+        jobName: string;
+        data: {
+          userId: number;
+          content: string;
+          taskId: string;
+          timestamp: number;
+        };
+        jobOptions: { jobId: string };
+      };
+      expect(errorCall.queue).toBe('scheduled-messages');
+      expect(errorCall.jobName).toBe('process-scheduled-message');
+      expect(errorCall.data.userId).toBe(42);
+      expect(errorCall.data.content).toContain('task-1');
+      expect(errorCall.data.content).toContain('Something went wrong');
+      expect(errorCall.jobOptions.jobId).toStartWith('scheduled-error-task-1-');
     });
   });
 });

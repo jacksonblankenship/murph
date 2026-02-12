@@ -49,6 +49,7 @@ describe('ChannelOrchestratorService', () => {
           text: 'LLM response',
           messages: [{ role: 'assistant', content: 'LLM response' }],
           finishReason: 'stop',
+          totalToolCallCount: 0,
         }),
       ),
     };
@@ -366,6 +367,174 @@ describe('ChannelOrchestratorService', () => {
       const result = await orchestrator.execute('test', createMockRequest());
 
       expect(result.outputsSent).toBe(true);
+    });
+  });
+
+  describe('tool-only response follow-up', () => {
+    test('makes follow-up call without tools when text is empty and tools were used', async () => {
+      mockLlmService.generate = mock()
+        .mockResolvedValueOnce({
+          text: '',
+          messages: [{ role: 'assistant', content: '' }],
+          finishReason: 'stop',
+          totalToolCallCount: 1,
+        })
+        .mockResolvedValueOnce({
+          text: 'Follow-up response',
+          messages: [{ role: 'assistant', content: 'Follow-up response' }],
+          finishReason: 'stop',
+          totalToolCallCount: 0,
+        });
+
+      await orchestrator.execute('test', createMockRequest());
+
+      expect(mockLlmService.generate).toHaveBeenCalledTimes(2);
+      const followUpCall = mockLlmService.generate.mock.calls[1][0];
+      expect(followUpCall.tools).toBeUndefined();
+    });
+
+    test('stores combined messages from both calls', async () => {
+      const initialMessages = [
+        { role: 'assistant', content: 'tool call result' },
+      ];
+      const followUpMessages = [
+        { role: 'assistant', content: 'Follow-up response' },
+      ];
+
+      mockLlmService.generate = mock()
+        .mockResolvedValueOnce({
+          text: '',
+          messages: initialMessages,
+          finishReason: 'stop',
+          totalToolCallCount: 1,
+        })
+        .mockResolvedValueOnce({
+          text: 'Follow-up response',
+          messages: followUpMessages,
+          finishReason: 'stop',
+          totalToolCallCount: 0,
+        });
+
+      await orchestrator.execute(
+        'test',
+        createMockRequest({ userId: 42, message: 'Hi' }),
+      );
+
+      const storedMessages =
+        mockConversationService.addMessages.mock.calls[0][1];
+      // First message is the user message, then initial + follow-up
+      expect(storedMessages[0]).toEqual({ role: 'user', content: 'Hi' });
+      expect(storedMessages).toContainEqual(initialMessages[0]);
+      expect(storedMessages).toContainEqual(followUpMessages[0]);
+    });
+
+    test('sends outputs using follow-up text', async () => {
+      const output: OutputHandler = {
+        send: mock(() => Promise.resolve()) as never,
+      };
+
+      mockRegistry.get = mock(() => createMockChannel({ outputs: [output] }));
+
+      mockLlmService.generate = mock()
+        .mockResolvedValueOnce({
+          text: '',
+          messages: [],
+          finishReason: 'stop',
+          totalToolCallCount: 1,
+        })
+        .mockResolvedValueOnce({
+          text: 'Follow-up text',
+          messages: [],
+          finishReason: 'stop',
+          totalToolCallCount: 0,
+        });
+
+      const result = await orchestrator.execute(
+        'test',
+        createMockRequest({ userId: 42 }),
+      );
+
+      expect(result.text).toBe('Follow-up text');
+      expect(result.outputsSent).toBe(true);
+      expect(output.send).toHaveBeenCalledWith(
+        42,
+        'Follow-up text',
+        expect.any(Object),
+      );
+    });
+
+    test('does NOT follow up when text is present even if tools were called', async () => {
+      mockLlmService.generate = mock().mockResolvedValueOnce({
+        text: 'Has text',
+        messages: [{ role: 'assistant', content: 'Has text' }],
+        finishReason: 'stop',
+        totalToolCallCount: 3,
+      });
+
+      await orchestrator.execute('test', createMockRequest());
+
+      expect(mockLlmService.generate).toHaveBeenCalledTimes(1);
+    });
+
+    test('does NOT follow up when no tools were called and text is empty', async () => {
+      mockLlmService.generate = mock().mockResolvedValueOnce({
+        text: '',
+        messages: [],
+        finishReason: 'stop',
+        totalToolCallCount: 0,
+      });
+
+      await orchestrator.execute('test', createMockRequest());
+
+      expect(mockLlmService.generate).toHaveBeenCalledTimes(1);
+    });
+
+    test('gives up gracefully when follow-up also produces no text', async () => {
+      mockLlmService.generate = mock()
+        .mockResolvedValueOnce({
+          text: '',
+          messages: [],
+          finishReason: 'stop',
+          totalToolCallCount: 1,
+        })
+        .mockResolvedValueOnce({
+          text: '',
+          messages: [],
+          finishReason: 'stop',
+          totalToolCallCount: 0,
+        });
+
+      const result = await orchestrator.execute('test', createMockRequest());
+
+      // Only 2 calls — no infinite loop
+      expect(mockLlmService.generate).toHaveBeenCalledTimes(2);
+      expect(result.text).toBe('');
+      expect(result.outputsSent).toBe(false);
+    });
+
+    test('forwards abort signal to follow-up call', async () => {
+      const abortController = new AbortController();
+
+      mockLlmService.generate = mock()
+        .mockResolvedValueOnce({
+          text: '',
+          messages: [],
+          finishReason: 'stop',
+          totalToolCallCount: 1,
+        })
+        .mockResolvedValueOnce({
+          text: 'Follow-up',
+          messages: [],
+          finishReason: 'stop',
+          totalToolCallCount: 0,
+        });
+
+      await orchestrator.execute('test', createMockRequest(), {
+        abortSignal: abortController.signal,
+      });
+
+      const followUpCall = mockLlmService.generate.mock.calls[1][0];
+      expect(followUpCall.abortSignal).toBe(abortController.signal);
     });
   });
 });

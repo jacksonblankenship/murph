@@ -23,11 +23,14 @@ import { TelegramOutput } from './outputs/telegram.output';
 import { GardenTenderPreset } from './presets/garden-tender.preset';
 import { ScheduledPreset } from './presets/scheduled.preset';
 import { UserDirectPreset } from './presets/user-direct.preset';
+import { VoicePreset } from './presets/voice.preset';
 // Tool Factories
 import { GardenToolFactory } from './tools/garden.factory';
+import { HangUpToolFactory } from './tools/hang-up.factory';
 import { SchedulingToolFactory } from './tools/scheduling.factory';
 import { SeedToolFactory } from './tools/seed.factory';
 import { TimeToolFactory } from './tools/time.factory';
+import { VoiceCallToolFactory } from './tools/voice-call.factory';
 import { WebSearchToolFactory } from './tools/web-search.factory';
 // Transformers
 import { ProactiveTransformer } from './transformers/proactive.transformer';
@@ -73,7 +76,9 @@ import { ProactiveTransformer } from './transformers/proactive.transformer';
     // Tool Factories
     TimeToolFactory,
     GardenToolFactory,
+    HangUpToolFactory,
     SeedToolFactory,
+    VoiceCallToolFactory,
     WebSearchToolFactory,
     SchedulingToolFactory,
 
@@ -81,6 +86,7 @@ import { ProactiveTransformer } from './transformers/proactive.transformer';
     UserDirectPreset,
     ScheduledPreset,
     GardenTenderPreset,
+    VoicePreset,
   ],
   exports: [ChannelOrchestratorService, ChannelRegistry],
 })

@@ -9,6 +9,7 @@ import { CacheModule } from './cache/cache.module';
 import { CommonModule } from './common/common.module';
 import { configuration } from './config/configuration';
 import { DispatcherModule } from './dispatcher';
+import { HealthModule } from './health/health.module';
 import { InboundModule } from './inbound';
 import { LoggingModule } from './logging/logging.module';
 import { MessagesModule } from './messages/messages.module';
@@ -16,6 +17,7 @@ import { PromptModule } from './prompts';
 import { SchedulerModule } from './scheduler/scheduler.module';
 import { SyncModule } from './sync/sync.module';
 import { TelegramModule } from './transport/telegram/telegram.module';
+import { VoiceModule } from './transport/voice/voice.module';
 
 @Module({
   imports: [
@@ -49,6 +51,7 @@ import { TelegramModule } from './transport/telegram/telegram.module';
     }),
     CommonModule,
     DispatcherModule,
+    HealthModule,
     LoggingModule,
     CacheModule,
     PromptModule,
@@ -60,6 +63,7 @@ import { TelegramModule } from './transport/telegram/telegram.module';
       inject: [ConfigService],
     }),
     TelegramModule,
+    VoiceModule,
     InboundModule,
     SchedulerModule,
     MessagesModule,

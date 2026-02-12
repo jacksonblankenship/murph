@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { ModelMessage, Tool } from 'ai';
 import { PinoLogger } from 'nestjs-pino';
-import { LlmService } from '../ai/llm.service';
+import { type LlmResponse, LlmService } from '../ai/llm.service';
 import type { ConversationMessage } from '../memory/conversation.schemas';
 import { ConversationService } from '../memory/conversation.service';
 import { ConversationVectorService } from '../memory/conversation-vector.service';
@@ -13,6 +13,7 @@ import type {
   EnrichmentRequest,
   EnrichmentResult,
   OutputContext,
+  StreamEvent,
   TransformContext,
 } from './channel.types';
 
@@ -115,30 +116,31 @@ export class ChannelOrchestratorService {
       },
     });
 
-    // 7. Store conversation history
+    // 7. Resolve tool-only responses with a follow-up call
+    const resolved = await this.resolveToolOnlyResponse(
+      response,
+      channel.systemPrompt,
+      messages,
+      options.abortSignal,
+    );
+
+    // 8. Store conversation history (includes both calls if follow-up happened)
     await this.storeConversation(
       request.userId,
       transformedMessage,
-      response.messages,
+      resolved.allMessages,
     );
 
-    // 8. Run outputs pipeline (unless skipped or empty response)
+    // 9. Run outputs pipeline (unless skipped or empty response)
     let outputsSent = false;
-    const hasTextContent = response.text.trim().length > 0;
-
-    if (!hasTextContent) {
-      this.logger.warn(
-        { channelId, userId: request.userId },
-        'LLM produced no text content (tool-only response), skipping outputs',
-      );
-    }
+    const hasTextContent = resolved.text.trim().length > 0;
 
     if (!options.skipOutputs && hasTextContent) {
       const outputs = options.outputOverrides ?? channel.outputs;
       outputsSent = await this.runOutputs(
         outputs,
         request.userId,
-        response.text,
+        resolved.text,
         {
           channelId,
           chatId: request.chatId,
@@ -148,10 +150,126 @@ export class ChannelOrchestratorService {
     }
 
     return {
-      text: response.text,
-      messages: response.messages as ConversationMessage[],
+      text: resolved.text,
+      messages: resolved.allMessages as ConversationMessage[],
       outputsSent,
     };
+  }
+
+  /**
+   * Execute a message through a channel pipeline with streaming output.
+   *
+   * Yields {@link StreamEvent} objects as the LLM generates tokens.
+   * Does NOT run outputs — the caller (e.g. voice gateway) is responsible
+   * for delivering the response.
+   *
+   * Conversation history is stored after the stream completes.
+   *
+   * @param channelId The channel to use
+   * @param request The execution request
+   * @param options Optional execution options
+   */
+  async *executeStreaming(
+    channelId: string,
+    request: ChannelExecuteRequest,
+    options: ChannelExecuteOptions = {},
+  ): AsyncGenerator<StreamEvent> {
+    const channel = this.registry.get(channelId);
+
+    this.logger.debug(
+      { channelId, userId: request.userId },
+      'Executing channel (streaming)',
+    );
+
+    const transformedMessage = this.runTransformers(channel, request);
+
+    const enrichment = await this.runEnrichers(channel, {
+      message: transformedMessage,
+      userId: request.userId,
+      chatId: request.chatId,
+    });
+
+    const finalMessage = this.buildFinalMessage(transformedMessage, enrichment);
+    const tools = this.composeTools(channel, request);
+
+    const messages: ModelMessage[] = [
+      ...((enrichment.conversationHistory as ModelMessage[]) ?? []),
+      { role: 'user' as const, content: finalMessage },
+    ];
+
+    const streamResult = this.llmService.stream({
+      system: channel.systemPrompt,
+      messages,
+      tools,
+      abortSignal: options.abortSignal,
+    });
+
+    for await (const part of streamResult.fullStream) {
+      switch (part.type) {
+        case 'text-delta':
+          yield { type: 'text-delta', delta: part.text };
+          break;
+        case 'tool-call':
+          yield { type: 'tool-call', toolName: part.toolName };
+          break;
+        case 'tool-result':
+          yield { type: 'tool-result', toolName: part.toolName };
+          break;
+        case 'finish':
+          yield { type: 'finish' };
+          break;
+      }
+    }
+
+    // Store conversation after stream completes
+    const response = await streamResult.response;
+    await this.storeConversation(
+      request.userId,
+      transformedMessage,
+      response.messages as ModelMessage[],
+    );
+  }
+
+  /**
+   * If the LLM responded with only tool calls and no text, make a single
+   * follow-up call without tools to force text generation.
+   *
+   * This ensures the user always receives a visible reply when they sent a
+   * message. Other callers (e.g. GardenSeederProcessor) that intentionally
+   * expect tool-only responses call LlmService directly and are unaffected.
+   *
+   * @returns The final text and the combined messages from both calls.
+   */
+  private async resolveToolOnlyResponse(
+    response: LlmResponse,
+    systemPrompt: string,
+    originalMessages: ModelMessage[],
+    abortSignal?: AbortSignal,
+  ): Promise<{ text: string; allMessages: ModelMessage[] }> {
+    const hasText = response.text.trim().length > 0;
+    const hadToolCalls = response.totalToolCallCount > 0;
+
+    if (hasText || !hadToolCalls) {
+      return { text: response.text, allMessages: response.messages };
+    }
+
+    this.logger.debug(
+      'Tool-only response detected, making follow-up call without tools',
+    );
+
+    const followUp = await this.llmService.generate({
+      system: systemPrompt,
+      messages: [...originalMessages, ...response.messages],
+      abortSignal,
+    });
+
+    const allMessages = [...response.messages, ...followUp.messages];
+
+    if (followUp.text.trim().length === 0) {
+      this.logger.warn('Follow-up call also produced no text, giving up');
+    }
+
+    return { text: followUp.text, allMessages };
   }
 
   /**

@@ -67,6 +67,14 @@ export class QdrantService implements OnModuleInit {
     this.client = new QdrantClient({ url: qdrantUrl });
   }
 
+  /**
+   * Checks Qdrant connectivity by listing collections.
+   * Used by health checks to verify the vector database is reachable.
+   */
+  async ping(): Promise<void> {
+    await this.client.getCollections();
+  }
+
   async onModuleInit() {
     await Promise.all([
       this.initCollection(),

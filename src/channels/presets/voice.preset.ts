@@ -5,28 +5,27 @@ import { ChannelRegistry } from '../channel.registry';
 import type { ChannelConfig } from '../channel.types';
 import { HistoryEnricher } from '../enrichers/history.enricher';
 import { TimeEnricher } from '../enrichers/time.enricher';
-import { TelegramOutput } from '../outputs/telegram.output';
-import { SchedulingToolFactory } from '../tools/scheduling.factory';
+import { NullOutput } from '../outputs/null.output';
+import { HangUpToolFactory } from '../tools/hang-up.factory';
 import { SeedToolFactory } from '../tools/seed.factory';
 import { TimeToolFactory } from '../tools/time.factory';
-import { VoiceCallToolFactory } from '../tools/voice-call.factory';
 import { WebSearchToolFactory } from '../tools/web-search.factory';
 
 /**
- * Channel ID for user-direct interactions.
+ * Channel ID for voice phone calls.
  */
-export const USER_DIRECT_CHANNEL_ID = 'user-direct';
+export const VOICE_CHANNEL_ID = 'voice';
 
 /**
- * Preset for reactive user-initiated conversations.
+ * Preset for voice phone call conversations via Twilio ConversationRelay.
  *
  * Features:
- * - Full tool access (time, seed, web search, scheduling)
- * - Hybrid context enrichment (conversation history + long-term memory)
- * - Telegram output
+ * - History + time enrichment for conversational context
+ * - Tools: time, seed, web search, hang_up
+ * - Null output (voice gateway delivers responses via WebSocket)
  */
 @Injectable()
-export class UserDirectPreset implements OnModuleInit {
+export class VoicePreset implements OnModuleInit {
   constructor(
     private readonly registry: ChannelRegistry,
     private readonly promptService: PromptService,
@@ -35,26 +34,27 @@ export class UserDirectPreset implements OnModuleInit {
     private readonly timeToolFactory: TimeToolFactory,
     private readonly seedToolFactory: SeedToolFactory,
     private readonly webSearchToolFactory: WebSearchToolFactory,
-    private readonly schedulingToolFactory: SchedulingToolFactory,
-    private readonly voiceCallToolFactory: VoiceCallToolFactory,
-    private readonly telegramOutput: TelegramOutput,
+    private readonly hangUpToolFactory: HangUpToolFactory,
+    private readonly nullOutput: NullOutput,
   ) {}
 
   onModuleInit(): void {
     this.registry.register(this.build());
   }
 
+  /**
+   * Builds the voice channel configuration.
+   */
   build(): ChannelConfig {
-    return new ChannelBuilder(USER_DIRECT_CHANNEL_ID)
-      .withSystemPrompt(this.promptService.get('user-direct'))
+    return new ChannelBuilder(VOICE_CHANNEL_ID)
+      .withSystemPrompt(this.promptService.get('voice'))
       .addEnricher(this.historyEnricher)
       .addEnricher(this.timeEnricher)
       .addTools(this.timeToolFactory)
       .addTools(this.seedToolFactory)
       .addTools(this.webSearchToolFactory)
-      .addTools(this.schedulingToolFactory)
-      .addTools(this.voiceCallToolFactory)
-      .addOutput(this.telegramOutput)
+      .addTools(this.hangUpToolFactory)
+      .addOutput(this.nullOutput)
       .build();
   }
 }
