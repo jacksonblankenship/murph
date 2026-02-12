@@ -71,31 +71,38 @@ export class VaultService implements OnModuleInit, OnModuleDestroy {
 
     // Discover and load all markdown files
     const glob = new Bun.Glob('**/*.md');
-    for await (const relativePath of glob.scan({ cwd: this.vaultPath })) {
-      if (this.shouldExclude(relativePath)) continue;
+    try {
+      for await (const relativePath of glob.scan({ cwd: this.vaultPath })) {
+        if (this.shouldExclude(relativePath)) continue;
 
-      const absolutePath = resolve(this.vaultPath, relativePath);
+        const absolutePath = resolve(this.vaultPath, relativePath);
 
-      try {
-        const [content, fileStat] = await Promise.all([
-          Bun.file(absolutePath).text(),
-          stat(absolutePath),
-        ]);
+        try {
+          const [content, fileStat] = await Promise.all([
+            Bun.file(absolutePath).text(),
+            stat(absolutePath),
+          ]);
 
-        const noteStat: NoteStat = {
-          ctime: fileStat.birthtime,
-          mtime: fileStat.mtime,
-          size: fileStat.size,
-        };
+          const noteStat: NoteStat = {
+            ctime: fileStat.birthtime,
+            mtime: fileStat.mtime,
+            size: fileStat.size,
+          };
 
-        const note = new Note(relativePath, content, noteStat);
-        this.notes.set(relativePath, note);
-      } catch (error) {
-        this.logger.warn(
-          { path: relativePath, err: error },
-          'Failed to load note',
-        );
+          const note = new Note(relativePath, content, noteStat);
+          this.notes.set(relativePath, note);
+        } catch (error) {
+          this.logger.warn(
+            { path: relativePath, err: error },
+            'Failed to load note',
+          );
+        }
       }
+    } catch (error) {
+      this.logger.warn(
+        { err: error, vaultPath: this.vaultPath },
+        'Error during vault scan — some notes may not be loaded',
+      );
     }
 
     // Build backlink index
@@ -112,23 +119,29 @@ export class VaultService implements OnModuleInit, OnModuleDestroy {
     );
 
     // Start watching for external changes
-    this.fsWatcher = watch(
-      this.vaultPath,
-      { recursive: true },
-      (_eventType, filename) => {
-        if (filename) {
-          this.handleFsEvent(filename);
-        }
-      },
-    );
-
-    // Handle watcher errors (e.g., EACCES on lost+found in mounted volumes)
-    this.fsWatcher.on('error', (error: NodeJS.ErrnoException) => {
-      this.logger.warn(
-        { err: error, code: error.code },
-        'Filesystem watcher error',
+    try {
+      this.fsWatcher = watch(
+        this.vaultPath,
+        { recursive: true },
+        (_eventType, filename) => {
+          if (filename) {
+            this.handleFsEvent(filename);
+          }
+        },
       );
-    });
+
+      this.fsWatcher.on('error', (error: NodeJS.ErrnoException) => {
+        this.logger.warn(
+          { err: error, code: error.code },
+          'Filesystem watcher error',
+        );
+      });
+    } catch (error) {
+      this.logger.warn(
+        { err: error, vaultPath: this.vaultPath },
+        'Failed to start filesystem watcher — external changes will not be detected',
+      );
+    }
   }
 
   onModuleDestroy(): void {
