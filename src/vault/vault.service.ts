@@ -121,6 +121,14 @@ export class VaultService implements OnModuleInit, OnModuleDestroy {
         }
       },
     );
+
+    // Handle watcher errors (e.g., EACCES on lost+found in mounted volumes)
+    this.fsWatcher.on('error', (error: NodeJS.ErrnoException) => {
+      this.logger.warn(
+        { err: error, code: error.code },
+        'Filesystem watcher error',
+      );
+    });
   }
 
   onModuleDestroy(): void {
