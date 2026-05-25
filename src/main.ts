@@ -13,6 +13,21 @@ async function bootstrap() {
   // Use pino logger for all NestJS logs
   app.useLogger(app.get(PinoLogger));
 
+  // Keep the process alive on rejections/exceptions we couldn't catch at
+  // the call site. The voice gateway's WS message handler is a primary
+  // source — under Bun, AbortSignal listeners can throw out of band from
+  // any try/catch we wrap around `.abort()`, killing the call mid-session.
+  const processLogger = new Logger('Process');
+  process.on('unhandledRejection', reason => {
+    processLogger.error(
+      reason instanceof Error ? reason.stack : String(reason),
+      'unhandledRejection',
+    );
+  });
+  process.on('uncaughtException', err => {
+    processLogger.error(err.stack ?? err.message, 'uncaughtException');
+  });
+
   // Use raw ws adapter for WebSocket (ConversationRelay)
   app.useWebSocketAdapter(new WsAdapter(app));
 
