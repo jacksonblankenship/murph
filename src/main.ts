@@ -21,10 +21,16 @@ async function bootstrap() {
   // Enable graceful shutdown
   app.enableShutdownHooks();
 
-  const port = process.env.PORT || DEFAULT_PORT;
-  await app.listen(port);
+  const port = Number(process.env.PORT) || DEFAULT_PORT;
+  // Bind to `::` (IPv6 dual-stack) per Railway's NestJS guide. Railway's
+  // public proxy connects to upstream over IPv4 while the private network
+  // and healthchecks use IPv6 — listening on `::` accepts both via
+  // IPV6_V6ONLY=0. Without an explicit host, runtime defaults vary
+  // (Bun in particular can leave the listener IPv6-only, which 502s the
+  // public proxy with "connection refused").
+  await app.listen(port, '::');
 
-  logger.log('Telegram bot is running...');
+  logger.log(`Murph listening on [::]:${port}`);
 }
 
 bootstrap();
