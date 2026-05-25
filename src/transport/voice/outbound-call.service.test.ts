@@ -13,6 +13,8 @@ describe('OutboundCallService', () => {
       get: mock((key: string) => {
         const config: Record<string, string> = {
           'twilio.accountSid': 'AC123',
+          'twilio.apiKeySid': 'SK123',
+          'twilio.apiKeySecret': 'secret123',
           'twilio.authToken': 'token123',
           'twilio.phoneNumber': '+15551234567',
           'voice.userPhone': '+15559876543',

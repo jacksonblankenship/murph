@@ -13,6 +13,9 @@ export const configuration = () => ({
   },
   twilio: {
     accountSid: process.env.TWILIO_ACCOUNT_SID,
+    apiKeySid: process.env.TWILIO_API_KEY_SID,
+    apiKeySecret: process.env.TWILIO_API_KEY_SECRET,
+    /** Required for webhook signature validation; Twilio signs with HMAC-SHA1(authToken). */
     authToken: process.env.TWILIO_AUTH_TOKEN,
     phoneNumber: process.env.TWILIO_PHONE_NUMBER,
   },

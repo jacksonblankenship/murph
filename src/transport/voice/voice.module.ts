@@ -5,6 +5,7 @@ import { Queue } from 'bullmq';
 import { ChannelModule } from '../../channels/channel.module';
 import { AgentDispatcher } from '../../dispatcher';
 import { OutboundCallService } from './outbound-call.service';
+import { TwilioSignatureGuard } from './twilio-signature.guard';
 import { VoiceGateway } from './voice.gateway';
 import { VoiceCallProcessor } from './voice-call.processor';
 import { VoiceSessionManager } from './voice-session.manager';
@@ -39,6 +40,7 @@ import { VoiceTwimlController } from './voice-twiml.controller';
     VoiceSessionManager,
     OutboundCallService,
     VoiceCallProcessor,
+    TwilioSignatureGuard,
   ],
   exports: [OutboundCallService],
 })

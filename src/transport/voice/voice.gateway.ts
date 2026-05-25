@@ -1,3 +1,4 @@
+import type { IncomingMessage } from 'node:http';
 import { ConfigService } from '@nestjs/config';
 import {
   OnGatewayConnection,
@@ -5,6 +6,7 @@ import {
   WebSocketGateway,
 } from '@nestjs/websockets';
 import { PinoLogger } from 'nestjs-pino';
+import { validateRequest } from 'twilio';
 import type { WebSocket } from 'ws';
 import { ChannelOrchestratorService } from '../../channels/channel-orchestrator.service';
 import { VOICE_CHANNEL_ID } from '../../channels/presets/voice.preset';
@@ -12,6 +14,9 @@ import { VoiceSessionManager } from './voice-session.manager';
 
 /** Delay in ms before sending end message, lets Twilio finish speaking. */
 const HANG_UP_DELAY_MS = 500;
+
+/** WebSocket close code 1008 (RFC 6455) — message violates server policy. */
+const WS_CLOSE_POLICY_VIOLATION = 1008;
 
 /**
  * ConversationRelay message types sent by Twilio.
@@ -28,6 +33,13 @@ interface SetupMessage {
 interface PromptMessage {
   type: 'prompt';
   voicePrompt: string;
+  /**
+   * False when Twilio sends a partial prompt (e.g. with `speechtimeout` or
+   * `partialPrompts` enabled). We only process the final transcript so the
+   * LLM isn't invoked mid-utterance.
+   */
+  last?: boolean;
+  lang?: string;
 }
 
 interface InterruptMessage {
@@ -60,6 +72,8 @@ type TwilioMessage =
 @WebSocketGateway({ path: '/voice/ws' })
 export class VoiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private readonly userId: number;
+  private readonly authToken: string;
+  private readonly wsUrl: string;
 
   constructor(
     private readonly logger: PinoLogger,
@@ -69,13 +83,30 @@ export class VoiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {
     this.logger.setContext(VoiceGateway.name);
     this.userId = this.configService.get<number>('voice.userId');
+    this.authToken = this.configService.get<string>('twilio.authToken');
+    const serverUrl = this.configService.get<string>('voice.serverUrl') ?? '';
+    this.wsUrl = `${serverUrl.replace(/^http/, 'ws')}/voice/ws`;
   }
 
   /**
    * Called when Twilio opens the WebSocket connection.
-   * Registers a raw message handler to dispatch on message type.
+   *
+   * Validates the `X-Twilio-Signature` header on the handshake before
+   * accepting the session. Twilio signs the WSS URL (no body) with
+   * HMAC-SHA1(authToken), per ConversationRelay's signature-header feature.
+   *
+   * @see https://www.twilio.com/en-us/changelog/new-features-now-available-for-conversationrelay
    */
-  handleConnection(client: WebSocket): void {
+  handleConnection(client: WebSocket, request?: IncomingMessage): void {
+    if (!this.verifySignature(request)) {
+      this.logger.warn(
+        { ip: request?.socket?.remoteAddress },
+        'Rejected WebSocket handshake with invalid Twilio signature',
+      );
+      client.close(WS_CLOSE_POLICY_VIOLATION, 'Invalid Twilio signature');
+      return;
+    }
+
     this.logger.info('Voice WebSocket connected');
 
     client.on('message', (data: Buffer | string) => {
@@ -160,11 +191,26 @@ export class VoiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
    *
    * Streams the LLM response back to Twilio as `text` messages.
    * Watches for `hang_up` tool calls to end the call after the response.
+   *
+   * Skips partial prompts (`last !== true`). With `speechtimeout` set on
+   * the relay, Twilio may emit interim transcripts as the caller speaks;
+   * acting on those would fire the LLM mid-utterance.
    */
   private async handlePrompt(
     client: WebSocket,
     message: PromptMessage,
   ): Promise<void> {
+    // Default `last` to `true` for safety: if Twilio ever omits the field
+    // (older protocol, edge cases), treat the prompt as final rather than
+    // silently dropping it.
+    if (message.last === false) {
+      this.logger.debug(
+        { prompt: message.voicePrompt },
+        'Skipping partial prompt',
+      );
+      return;
+    }
+
     const session = this.sessionManager.getByClient(client);
     if (!session) {
       this.logger.warn('Prompt received without active session');
@@ -272,5 +318,30 @@ export class VoiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (client.readyState === client.OPEN) {
       client.send(JSON.stringify(message));
     }
+  }
+
+  /**
+   * Validates the `X-Twilio-Signature` header on the WS upgrade request.
+   *
+   * Returns `true` if validation is disabled (no `authToken` configured —
+   * intended for local-only flows; production must set TWILIO_AUTH_TOKEN).
+   * Returns `false` if the header is missing or HMAC validation fails.
+   */
+  private verifySignature(request?: IncomingMessage): boolean {
+    if (!this.authToken) {
+      this.logger.warn(
+        'TWILIO_AUTH_TOKEN not set — accepting WS handshake without signature validation',
+      );
+      return true;
+    }
+    if (!request) {
+      return false;
+    }
+    const signature = request.headers['x-twilio-signature'];
+    const signatureValue = Array.isArray(signature) ? signature[0] : signature;
+    if (!signatureValue) {
+      return false;
+    }
+    return validateRequest(this.authToken, signatureValue, this.wsUrl, {});
   }
 }

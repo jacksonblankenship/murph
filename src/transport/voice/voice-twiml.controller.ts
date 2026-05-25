@@ -7,12 +7,15 @@ import {
   Post,
   Query,
   Res,
+  UseGuards,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Response } from 'express';
 import { PinoLogger } from 'nestjs-pino';
 import twilio from 'twilio';
+import type VoiceResponse from 'twilio/lib/twiml/VoiceResponse';
 import { AgentDispatcher } from '../../dispatcher';
+import { TwilioSignatureGuard } from './twilio-signature.guard';
 
 /** Call statuses that indicate the call never connected to the user. */
 const TERMINAL_FAILURE_STATUSES = new Set([
@@ -56,6 +59,7 @@ export class VoiceTwimlController {
    */
   @Post('twiml')
   @Header('Content-Type', 'text/xml')
+  @UseGuards(TwilioSignatureGuard)
   handleTwiml(@Query('context') context?: string): string {
     const response = new twilio.twiml.VoiceResponse();
     const connect = response.connect();
@@ -63,29 +67,31 @@ export class VoiceTwimlController {
     const isOutbound = !!context;
     const wsUrl = `${this.serverUrl.replace(/^http/, 'ws')}/voice/ws`;
 
-    const relayAttrs: Record<string, string | boolean> = {
+    const relayAttrs: VoiceResponse.ConversationRelayAttributes = {
       url: wsUrl,
       ttsProvider: 'ElevenLabs',
       voice: 'yM93hbw8Qtvdma2wCnJG',
       transcriptionProvider: 'Deepgram',
-      speechModel: 'nova-2-general',
-      interruptible: true,
+      speechModel: 'nova-3-general',
+      interruptible: 'any',
+      interruptSensitivity: 'medium',
       dtmfDetection: true,
+      // ms of silence before Twilio reports the final prompt (600–5000).
+      // Lower than the default `auto` to reduce end-of-turn latency.
+      speechtimeout: '1500',
+      // Stops "yeah"/"uh-huh" backchannels from interrupting Murph mid-sentence.
+      ignorebackchannel: 'true',
+      // Tokens-played + speaker-events let us track playback state if we ever
+      // need richer barge-in handling.
+      events: 'speaker-events tokens-played',
     };
 
     if (!isOutbound) {
       relayAttrs.welcomeGreeting = 'Hey!';
+      relayAttrs.welcomeGreetingInterruptible = 'speech';
     }
 
-    // ConversationRelay is not in the Twilio SDK types yet
-    const relay = (
-      connect as unknown as Record<
-        string,
-        (
-          attrs: Record<string, string | boolean>,
-        ) => Record<string, (params: Record<string, string>) => void>
-      >
-    ).conversationRelay(relayAttrs);
+    const relay = connect.conversationRelay(relayAttrs);
 
     if (isOutbound) {
       relay.parameter({ name: 'callContext', value: context });
@@ -106,6 +112,7 @@ export class VoiceTwimlController {
    * @param body - Twilio status callback POST body
    */
   @Post('status')
+  @UseGuards(TwilioSignatureGuard)
   handleStatus(
     @Query('userId') userId?: string,
     @Query('context') context?: string,
@@ -182,6 +189,7 @@ export class VoiceTwimlController {
    */
   @Post('twiml/fallback')
   @Header('Content-Type', 'text/xml')
+  @UseGuards(TwilioSignatureGuard)
   handleTwimlFallback(): string {
     this.logger.warn('Primary TwiML handler failed, serving fallback');
     const response = new twilio.twiml.VoiceResponse();

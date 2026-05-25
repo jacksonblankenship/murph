@@ -34,8 +34,9 @@ export class OutboundCallService {
     this.logger.setContext(OutboundCallService.name);
 
     const accountSid = this.configService.get<string>('twilio.accountSid');
-    const authToken = this.configService.get<string>('twilio.authToken');
-    this.client = twilio(accountSid, authToken);
+    const apiKeySid = this.configService.get<string>('twilio.apiKeySid');
+    const apiKeySecret = this.configService.get<string>('twilio.apiKeySecret');
+    this.client = twilio(apiKeySid, apiKeySecret, { accountSid });
 
     this.twilioPhoneNumber =
       this.configService.get<string>('twilio.phoneNumber');
