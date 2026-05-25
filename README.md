@@ -108,7 +108,7 @@ graph LR
 | Service | Used By | Purpose |
 |---|---|---|
 | Anthropic | LlmService | LLM inference (Claude) |
-| OpenAI | IndexSyncProcessor | Embeddings for vector search |
+| OpenAI | EmbeddingService | Embeddings for vector search (used by IndexSyncProcessor and GardenTenderProcessor) |
 | ElevenLabs | TranscriptionService | Audio transcription |
 | Exa | ChannelOrchestrator (tool) | Web search |
 | Twilio | VoiceCallProcessor, VoiceGateway | Outbound/inbound voice calls |

@@ -5,6 +5,9 @@ export const configuration = () => ({
   anthropic: {
     apiKey: process.env.ANTHROPIC_API_KEY,
   },
+  openai: {
+    apiKey: process.env.OPENAI_API_KEY,
+  },
   elevenlabs: {
     apiKey: process.env.ELEVENLABS_API_KEY,
   },
@@ -25,12 +28,6 @@ export const configuration = () => ({
   },
   exa: {
     apiKey: process.env.EXA_API_KEY,
-  },
-  messages: {
-    debounceMs: Number.parseInt(
-      process.env.USER_MESSAGE_DEBOUNCE_MS || '2000',
-      10,
-    ),
   },
   vault: {
     path: process.env.VAULT_PATH || './vault',
@@ -54,7 +51,6 @@ export const configuration = () => ({
     searchLimit: Number.parseInt(process.env.VECTOR_SEARCH_LIMIT || '5', 10),
   },
   gardenTending: {
-    cronSchedule: process.env.GARDEN_TENDING_CRON || '0 3 * * *', // Daily at 3am
     enabled: process.env.GARDEN_TENDING_ENABLED !== 'false',
   },
 });
