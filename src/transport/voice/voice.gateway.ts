@@ -135,6 +135,11 @@ export class VoiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   /**
    * Routes incoming messages to the appropriate handler.
+   *
+   * `handlePrompt` is async and fired from a sync `ws` `message` event, so
+   * any rejection (including AbortError thrown synchronously by Bun's
+   * AbortController when its signal listeners throw) would otherwise become
+   * an unhandled promise rejection and kill the process.
    */
   private dispatchMessage(client: WebSocket, message: TwilioMessage): void {
     switch (message.type) {
@@ -142,7 +147,9 @@ export class VoiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
         this.handleSetup(client, message as SetupMessage);
         break;
       case 'prompt':
-        this.handlePrompt(client, message as PromptMessage);
+        this.handlePrompt(client, message as PromptMessage).catch(err => {
+          this.logger.error({ err }, 'handlePrompt failed');
+        });
         break;
       case 'interrupt':
         this.handleInterrupt(client);
@@ -217,9 +224,10 @@ export class VoiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return;
     }
 
-    // Abort any previous stream
+    // Abort any previous stream. Wrapped because under Bun the AI SDK's
+    // signal listener can re-throw AbortError synchronously from .abort().
     if (session.abortController) {
-      session.abortController.abort();
+      this.safeAbort(session.abortController);
     }
 
     const abortController = new AbortController();
@@ -306,8 +314,25 @@ export class VoiceGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.logger.debug({ callSid: session.callSid }, 'Voice stream interrupted');
 
     if (session.abortController) {
-      session.abortController.abort();
+      this.safeAbort(session.abortController);
       session.abortController = undefined;
+    }
+  }
+
+  /**
+   * Calls `controller.abort()` and swallows any synchronous throw.
+   *
+   * Bun's AbortController dispatches the abort event to listeners
+   * synchronously; a listener that throws (the AI SDK does this in some
+   * paths) would otherwise propagate out of the call site and reject our
+   * async handler. We never care about the outcome of `.abort()` — we
+   * only need the signal to flip — so logging at debug is sufficient.
+   */
+  private safeAbort(controller: AbortController): void {
+    try {
+      controller.abort();
+    } catch (err) {
+      this.logger.debug({ err }, 'AbortController.abort() threw');
     }
   }
 
