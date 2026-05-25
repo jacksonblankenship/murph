@@ -63,7 +63,7 @@ export class OutboundCallService {
       {
         to: this.userPhone,
         twimlUrl,
-        context: context?.substring(0, LOG_PREVIEW_LENGTH),
+        callContext: context?.substring(0, LOG_PREVIEW_LENGTH),
       },
       'Initiating outbound call',
     );

@@ -33,18 +33,37 @@ export class VoiceCallProcessor extends WorkerHost {
 
   /**
    * Process a voice call job by initiating an outbound call.
+   *
+   * Errors thrown by Twilio (invalid URL, unverified number, auth failure)
+   * are logged before re-throwing so BullMQ's retry/failure machinery has
+   * something more actionable than a swallowed exception.
    */
   async process(job: Job<VoiceCallJobData>): Promise<string> {
     const { userId, context } = job.data;
 
+    // `callContext` rather than `context` — pino treats `context` as the
+    // logger's class-name slot, so using it here would clobber the
+    // `VoiceCallProcessor` tag on every log line.
     this.logger.info(
-      { userId, context: context?.substring(0, LOG_PREVIEW_LENGTH) },
+      { userId, callContext: context?.substring(0, LOG_PREVIEW_LENGTH) },
       'Processing outbound call job',
     );
 
-    const callSid = await this.outboundCallService.callUser(userId, context);
-
-    this.logger.info({ callSid, userId }, 'Outbound call initiated');
-    return callSid;
+    try {
+      const callSid = await this.outboundCallService.callUser(userId, context);
+      this.logger.info({ callSid, userId }, 'Outbound call initiated');
+      return callSid;
+    } catch (err) {
+      this.logger.error(
+        {
+          err,
+          userId,
+          attempt: job.attemptsMade + 1,
+          maxAttempts: job.opts.attempts,
+        },
+        'Outbound call failed',
+      );
+      throw err;
+    }
   }
 }
