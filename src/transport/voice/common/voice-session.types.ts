@@ -32,11 +32,11 @@ export interface VoiceOutputSink {
   /**
    * Stream a TTS token to the caller.
    *
-   * @param token  Text fragment to speak. Empty string is allowed when
-   *               `last` is true (signals end-of-turn with no extra text).
-   * @param last   Whether this is the final token in the current turn.
+   * @param token   Text fragment to speak. Empty string is allowed when
+   *                `isLast` is true (signals end-of-turn with no extra text).
+   * @param isLast  Whether this is the final token in the current turn.
    */
-  sendToken(token: string, last: boolean): void;
+  sendToken(token: string, isLast: boolean): void;
 
   /**
    * Signal that the call should end. The transport should close its
@@ -73,7 +73,15 @@ export interface VoiceCallSessionContext {
  * - Cancel any in-flight stream on interrupt, close, or new prompt
  */
 export interface VoiceCallSession {
+  /**
+   * Stable identifier for this call, populated from
+   * {@link VoiceCallSessionContext.sessionId} at construction time.
+   */
   readonly sessionId: string;
+  /**
+   * The user associated with this call, populated from
+   * {@link VoiceCallSessionContext.userId} at construction time.
+   */
   readonly userId: number;
   /**
    * Process an input event from the transport.

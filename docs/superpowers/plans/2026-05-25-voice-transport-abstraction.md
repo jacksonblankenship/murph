@@ -184,11 +184,11 @@ export interface VoiceOutputSink {
   /**
    * Stream a TTS token to the caller.
    *
-   * @param token  Text fragment to speak. Empty string is allowed when
-   *               `last` is true (signals end-of-turn with no extra text).
-   * @param last   Whether this is the final token in the current turn.
+   * @param token   Text fragment to speak. Empty string is allowed when
+   *                `isLast` is true (signals end-of-turn with no extra text).
+   * @param isLast  Whether this is the final token in the current turn.
    */
-  sendToken(token: string, last: boolean): void;
+  sendToken(token: string, isLast: boolean): void;
 
   /**
    * Signal that the call should end. The transport should close its
@@ -1198,8 +1198,8 @@ import type { TwilioOutboundMessage } from './twilio-message.types';
 export class TwilioOutputSink implements VoiceOutputSink {
   constructor(private readonly socket: WebSocket) {}
 
-  sendToken(token: string, last: boolean): void {
-    this.send({ type: 'text', token, last });
+  sendToken(token: string, isLast: boolean): void {
+    this.send({ type: 'text', token, last: isLast });
   }
 
   sendEnd(): void {
