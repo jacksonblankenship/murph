@@ -125,7 +125,8 @@ describe('VoiceCallSessionImpl', () => {
         isFinal: true,
       });
       expect(firstSignal?.aborted).toBe(true);
-      // Don't await `first` — it never resolves in this scenario.
+      // `first` resolves to undefined after the abort propagates; void
+      // suppresses the unused-Promise lint warning.
       void first;
     });
 
@@ -155,6 +156,56 @@ describe('VoiceCallSessionImpl', () => {
       await session.handleInput({
         type: 'transcript',
         text: 'hi',
+        isFinal: true,
+      });
+      await new Promise(resolve => setTimeout(resolve, 600));
+      expect(sink.sendEnd).not.toHaveBeenCalled();
+    });
+
+    test('cancels pending sendEnd when session is closed before timeout', async () => {
+      orchestrator.executeStreaming = generatorOf([
+        { type: 'text-delta', delta: 'Bye!' },
+        { type: 'tool-call', toolName: 'hang_up' },
+        { type: 'finish' },
+      ]);
+      const session = makeSession();
+      await session.handleInput({
+        type: 'transcript',
+        text: 'bye',
+        isFinal: true,
+      });
+      // Close before the 500ms delay elapses.
+      session.close();
+      await new Promise(resolve => setTimeout(resolve, 600));
+      expect(sink.sendEnd).not.toHaveBeenCalled();
+    });
+
+    test('cancels pending sendEnd when a new transcript arrives before timeout', async () => {
+      let callCount = 0;
+      orchestrator.executeStreaming = mock(() => {
+        callCount++;
+        if (callCount === 1) {
+          return (async function* () {
+            yield { type: 'text-delta', delta: 'Bye!' };
+            yield { type: 'tool-call', toolName: 'hang_up' };
+            yield { type: 'finish' };
+          })();
+        }
+        return (async function* () {
+          yield { type: 'text-delta', delta: 'Wait!' };
+          yield { type: 'finish' };
+        })();
+      });
+      const session = makeSession();
+      await session.handleInput({
+        type: 'transcript',
+        text: 'bye',
+        isFinal: true,
+      });
+      // New transcript before the hang-up timer fires.
+      await session.handleInput({
+        type: 'transcript',
+        text: 'actually wait',
         isFinal: true,
       });
       await new Promise(resolve => setTimeout(resolve, 600));

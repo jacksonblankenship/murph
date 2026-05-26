@@ -30,6 +30,7 @@ export class VoiceCallSessionImpl implements VoiceCallSession {
   readonly userId: number;
 
   private currentAbort: AbortController | undefined;
+  private hangUpTimeoutId: ReturnType<typeof setTimeout> | undefined;
   private shouldHangUp = false;
   private pendingCallContext: string | undefined;
   private closed = false;
@@ -46,6 +47,13 @@ export class VoiceCallSessionImpl implements VoiceCallSession {
     this.pendingCallContext = context.callContext;
   }
 
+  /**
+   * @see VoiceCallSession.handleInput
+   *
+   * Asymmetric resolve: awaits when no stream is in flight (caller sees
+   * completion); fire-and-forgets when superseding an in-flight stream
+   * (caller is not blocked, errors are still logged internally).
+   */
   async handleInput(event: VoiceInputEvent): Promise<void> {
     if (this.closed) {
       this.logger.debug(
@@ -86,6 +94,7 @@ export class VoiceCallSessionImpl implements VoiceCallSession {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.cancelHangUpTimer();
     if (this.currentAbort) {
       this.safeAbort(this.currentAbort);
       this.currentAbort = undefined;
@@ -102,8 +111,11 @@ export class VoiceCallSessionImpl implements VoiceCallSession {
       return;
     }
 
-    // Cancel any in-flight stream from a previous prompt.
+    // Cancel any in-flight stream from a previous prompt, plus any pending
+    // hang-up timer from a prior turn (the user spoke again before we
+    // could end the call — don't end it now).
     if (this.currentAbort) this.safeAbort(this.currentAbort);
+    this.cancelHangUpTimer();
 
     const abort = new AbortController();
     this.currentAbort = abort;
@@ -120,8 +132,13 @@ export class VoiceCallSessionImpl implements VoiceCallSession {
     );
 
     const abortPromise = new Promise<never>((_, reject) => {
-      abort.signal.addEventListener('abort', () =>
-        reject(Object.assign(new Error('AbortError'), { name: 'AbortError' })),
+      abort.signal.addEventListener(
+        'abort',
+        () =>
+          reject(
+            Object.assign(new Error('AbortError'), { name: 'AbortError' }),
+          ),
+        { once: true },
       );
     });
 
@@ -146,7 +163,11 @@ export class VoiceCallSessionImpl implements VoiceCallSession {
           case 'finish':
             this.sink.sendToken('', true);
             if (this.shouldHangUp) {
-              setTimeout(() => this.sink.sendEnd(), HANG_UP_DELAY_MS);
+              this.cancelHangUpTimer();
+              this.hangUpTimeoutId = setTimeout(() => {
+                this.hangUpTimeoutId = undefined;
+                this.sink.sendEnd();
+              }, HANG_UP_DELAY_MS);
             }
             break;
         }
@@ -173,9 +194,21 @@ export class VoiceCallSessionImpl implements VoiceCallSession {
       { sessionId: this.sessionId },
       'Voice stream interrupted',
     );
+    this.cancelHangUpTimer();
     if (this.currentAbort) {
       this.safeAbort(this.currentAbort);
       this.currentAbort = undefined;
+    }
+  }
+
+  /**
+   * Clear any pending hang-up `setTimeout`. Idempotent — safe to call
+   * when no timer is scheduled.
+   */
+  private cancelHangUpTimer(): void {
+    if (this.hangUpTimeoutId !== undefined) {
+      clearTimeout(this.hangUpTimeoutId);
+      this.hangUpTimeoutId = undefined;
     }
   }
 
