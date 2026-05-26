@@ -69,6 +69,18 @@ export class ChannelBuilder {
   }
 
   /**
+   * Add a bundle of tool factories. Equivalent to calling {@link addTools}
+   * for each factory returned by `bundle.factories()`, but lets a channel
+   * pull in a shared tool set in one line.
+   */
+  addToolBundle(bundle: { factories(): ToolFactory[] }): this {
+    for (const factory of bundle.factories()) {
+      this.toolFactories.push(factory);
+    }
+    return this;
+  }
+
+  /**
    * Add an output handler.
    * All outputs receive the response.
    */

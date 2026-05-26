@@ -6,10 +6,8 @@ import type { ChannelConfig } from '../channel.types';
 import { HistoryEnricher } from '../enrichers/history.enricher';
 import { TimeEnricher } from '../enrichers/time.enricher';
 import { NullOutput } from '../outputs/null.output';
+import { ConversationalToolBundle } from '../tools/conversational-tool-bundle';
 import { HangUpToolFactory } from '../tools/hang-up.factory';
-import { SeedToolFactory } from '../tools/seed.factory';
-import { TimeToolFactory } from '../tools/time.factory';
-import { WebSearchToolFactory } from '../tools/web-search.factory';
 
 /**
  * Channel ID for voice phone calls.
@@ -21,7 +19,8 @@ export const VOICE_CHANNEL_ID = 'voice';
  *
  * Features:
  * - History + time enrichment for conversational context
- * - Tools: time, seed, web search, hang_up
+ * - Shared conversational tools (time, seed, web search, scheduling)
+ * - Voice-only tool: hang_up
  * - Null output (voice gateway delivers responses via WebSocket)
  */
 @Injectable()
@@ -31,9 +30,7 @@ export class VoicePreset implements OnModuleInit {
     private readonly promptService: PromptService,
     private readonly historyEnricher: HistoryEnricher,
     private readonly timeEnricher: TimeEnricher,
-    private readonly timeToolFactory: TimeToolFactory,
-    private readonly seedToolFactory: SeedToolFactory,
-    private readonly webSearchToolFactory: WebSearchToolFactory,
+    private readonly conversationalTools: ConversationalToolBundle,
     private readonly hangUpToolFactory: HangUpToolFactory,
     private readonly nullOutput: NullOutput,
   ) {}
@@ -50,9 +47,7 @@ export class VoicePreset implements OnModuleInit {
       .withSystemPrompt(this.promptService.get('voice'))
       .addEnricher(this.historyEnricher)
       .addEnricher(this.timeEnricher)
-      .addTools(this.timeToolFactory)
-      .addTools(this.seedToolFactory)
-      .addTools(this.webSearchToolFactory)
+      .addToolBundle(this.conversationalTools)
       .addTools(this.hangUpToolFactory)
       .addOutput(this.nullOutput)
       .build();
