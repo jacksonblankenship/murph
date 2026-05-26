@@ -3,7 +3,7 @@
   "scripts": {
     "start": "bun run dist/main.js",
     "dev": "bun --watch src/main.ts",
-    "build": "tsc -p tsconfig.build.json && cp -r src/prompts/templates dist/prompts/ && cp -r src/transport/voice/assets dist/transport/voice/",
+    "build": "tsc -p tsconfig.build.json && cp -r src/prompts/templates dist/prompts/ && mkdir -p dist/transport/voice/twilio && cp -r src/transport/voice/twilio/assets dist/transport/voice/twilio/",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "lint:fix": "biome check --fix .",
