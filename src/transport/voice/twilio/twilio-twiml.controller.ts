@@ -67,7 +67,13 @@ export class TwilioTwimlController {
     const isOutbound = !!context;
     const wsUrl = `${this.serverUrl.replace(/^http/, 'ws')}/voice/ws`;
 
-    const relayAttrs: VoiceResponse.ConversationRelayAttributes = {
+    // The Twilio Node SDK's `ConversationRelayAttributes` type still uses
+    // lowercase keys for `speechtimeout` / `ignorebackchannel`, but Twilio's
+    // runtime XML validator only honours the camelCase forms documented at
+    // twilio.com/docs/voice/twiml/connect/conversationrelay. The lowercase
+    // variants emit warning 12200 and are silently dropped, so we cast and
+    // write the canonical names.
+    const relayAttrs = {
       url: wsUrl,
       ttsProvider: 'ElevenLabs',
       voice: 'yM93hbw8Qtvdma2wCnJG',
@@ -78,13 +84,13 @@ export class TwilioTwimlController {
       dtmfDetection: true,
       // ms of silence before Twilio reports the final prompt (600–5000).
       // Lower than the default `auto` to reduce end-of-turn latency.
-      speechtimeout: '1500',
+      speechTimeout: '1500',
       // Stops "yeah"/"uh-huh" backchannels from interrupting Murph mid-sentence.
-      ignorebackchannel: 'true',
+      ignoreBackchannel: 'true',
       // Tokens-played + speaker-events let us track playback state if we ever
       // need richer barge-in handling.
       events: 'speaker-events tokens-played',
-    };
+    } as unknown as VoiceResponse.ConversationRelayAttributes;
 
     if (!isOutbound) {
       relayAttrs.welcomeGreeting = 'Hey!';

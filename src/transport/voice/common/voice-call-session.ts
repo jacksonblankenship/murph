@@ -131,16 +131,25 @@ export class VoiceCallSessionImpl implements VoiceCallSession {
       'Processing transcript',
     );
 
+    // The abort listener rejects this promise so `Promise.race` can wake up
+    // the in-flight `stream.next()`. After the stream completes normally the
+    // race no longer awaits it, so attach a no-op `.catch` to keep a late
+    // abort (from interrupt/close/superseding transcript) from surfacing as
+    // an `unhandledRejection`.
+    let streamFinished = false;
     const abortPromise = new Promise<never>((_, reject) => {
       abort.signal.addEventListener(
         'abort',
-        () =>
+        () => {
+          if (streamFinished) return;
           reject(
             Object.assign(new Error('AbortError'), { name: 'AbortError' }),
-          ),
+          );
+        },
         { once: true },
       );
     });
+    abortPromise.catch(() => {});
 
     try {
       const stream = this.channelOrchestrator.executeStreaming(
@@ -185,6 +194,7 @@ export class VoiceCallSessionImpl implements VoiceCallSession {
         'Error processing transcript',
       );
     } finally {
+      streamFinished = true;
       if (this.currentAbort === abort) this.currentAbort = undefined;
     }
   }
