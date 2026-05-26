@@ -18,9 +18,12 @@ export class VoiceSessionRegistry {
   }
 
   /**
-   * Register a session. If a session with the same id is already
-   * registered it is closed and replaced — this handles transport-level
-   * reconnects where the old session must release its resources.
+   * Register a new session. If a different session with the same id is
+   * already registered, it is closed and replaced — this handles
+   * transport-level reconnects where the old session must release its
+   * resources. Callers should pass a freshly constructed session object,
+   * not re-register an existing instance (doing so would close the live
+   * session before replacing it with itself).
    */
   register(session: VoiceCallSession): void {
     const existing = this.sessions.get(session.sessionId);
