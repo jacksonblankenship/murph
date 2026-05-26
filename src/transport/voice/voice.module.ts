@@ -4,12 +4,12 @@ import { ConfigModule } from '@nestjs/config';
 import { Queue } from 'bullmq';
 import { ChannelModule } from '../../channels/channel.module';
 import { AgentDispatcher } from '../../dispatcher';
+import { VoiceSessionRegistry } from './common/voice-session.registry';
+import { TwilioGateway } from './twilio/twilio.gateway';
 import { TwilioCallProcessor } from './twilio/twilio-call.processor';
 import { TwilioOutboundService } from './twilio/twilio-outbound.service';
 import { TwilioSignatureGuard } from './twilio/twilio-signature.guard';
 import { TwilioTwimlController } from './twilio/twilio-twiml.controller';
-import { VoiceGateway } from './voice.gateway';
-import { VoiceSessionManager } from './voice-session.manager';
 
 @Module({
   imports: [
@@ -26,8 +26,8 @@ import { VoiceSessionManager } from './voice-session.manager';
   ],
   controllers: [TwilioTwimlController],
   providers: [
-    VoiceGateway,
-    VoiceSessionManager,
+    TwilioGateway,
+    VoiceSessionRegistry,
     TwilioOutboundService,
     TwilioCallProcessor,
     TwilioSignatureGuard,
