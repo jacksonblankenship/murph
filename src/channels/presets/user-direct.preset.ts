@@ -6,11 +6,8 @@ import type { ChannelConfig } from '../channel.types';
 import { HistoryEnricher } from '../enrichers/history.enricher';
 import { TimeEnricher } from '../enrichers/time.enricher';
 import { TelegramOutput } from '../outputs/telegram.output';
-import { SchedulingToolFactory } from '../tools/scheduling.factory';
-import { SeedToolFactory } from '../tools/seed.factory';
-import { TimeToolFactory } from '../tools/time.factory';
+import { ConversationalToolBundle } from '../tools/conversational-tool-bundle';
 import { VoiceCallToolFactory } from '../tools/voice-call.factory';
-import { WebSearchToolFactory } from '../tools/web-search.factory';
 
 /**
  * Channel ID for user-direct interactions.
@@ -21,7 +18,8 @@ export const USER_DIRECT_CHANNEL_ID = 'user-direct';
  * Preset for reactive user-initiated conversations.
  *
  * Features:
- * - Full tool access (time, seed, web search, scheduling)
+ * - Shared conversational tools (time, seed, web search, scheduling)
+ * - Telegram-only tool: voice_call (initiate an outbound call)
  * - Hybrid context enrichment (conversation history + long-term memory)
  * - Telegram output
  */
@@ -32,10 +30,7 @@ export class UserDirectPreset implements OnModuleInit {
     private readonly promptService: PromptService,
     private readonly historyEnricher: HistoryEnricher,
     private readonly timeEnricher: TimeEnricher,
-    private readonly timeToolFactory: TimeToolFactory,
-    private readonly seedToolFactory: SeedToolFactory,
-    private readonly webSearchToolFactory: WebSearchToolFactory,
-    private readonly schedulingToolFactory: SchedulingToolFactory,
+    private readonly conversationalTools: ConversationalToolBundle,
     private readonly voiceCallToolFactory: VoiceCallToolFactory,
     private readonly telegramOutput: TelegramOutput,
   ) {}
@@ -49,10 +44,7 @@ export class UserDirectPreset implements OnModuleInit {
       .withSystemPrompt(this.promptService.get('user-direct'))
       .addEnricher(this.historyEnricher)
       .addEnricher(this.timeEnricher)
-      .addTools(this.timeToolFactory)
-      .addTools(this.seedToolFactory)
-      .addTools(this.webSearchToolFactory)
-      .addTools(this.schedulingToolFactory)
+      .addToolBundle(this.conversationalTools)
       .addTools(this.voiceCallToolFactory)
       .addOutput(this.telegramOutput)
       .build();

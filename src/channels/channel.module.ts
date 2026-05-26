@@ -25,6 +25,7 @@ import { ScheduledPreset } from './presets/scheduled.preset';
 import { UserDirectPreset } from './presets/user-direct.preset';
 import { VoicePreset } from './presets/voice.preset';
 // Tool Factories
+import { ConversationalToolBundle } from './tools/conversational-tool-bundle';
 import { GardenToolFactory } from './tools/garden.factory';
 import { HangUpToolFactory } from './tools/hang-up.factory';
 import { SchedulingToolFactory } from './tools/scheduling.factory';
@@ -81,6 +82,7 @@ import { ProactiveTransformer } from './transformers/proactive.transformer';
     VoiceCallToolFactory,
     WebSearchToolFactory,
     SchedulingToolFactory,
+    ConversationalToolBundle,
 
     // Presets (register channels on init)
     UserDirectPreset,

@@ -61,7 +61,7 @@ export class LlmService {
     const anthropicProvider = createAnthropic({
       apiKey: this.configService.get<string>('anthropic.apiKey'),
     });
-    this.model = anthropicProvider('claude-sonnet-4-20250514');
+    this.model = anthropicProvider('claude-haiku-4-5-20251001');
   }
 
   /**
