@@ -16,6 +16,7 @@ import type {
   VoiceInputEvent,
 } from '../common/voice-session.types';
 import type {
+  TwilioDtmfMessage,
   TwilioInboundMessage,
   TwilioPromptMessage,
   TwilioSetupMessage,
@@ -118,7 +119,7 @@ export class TwilioGateway implements OnGatewayConnection, OnGatewayDisconnect {
       case 'dtmf':
         this.forwardToSession(client, {
           type: 'dtmf',
-          digit: (message as { digit: string }).digit,
+          digit: (message as TwilioDtmfMessage).digit,
         });
         return;
       case 'error':
