@@ -4,23 +4,13 @@ import { ConfigModule } from '@nestjs/config';
 import { Queue } from 'bullmq';
 import { ChannelModule } from '../../channels/channel.module';
 import { AgentDispatcher } from '../../dispatcher';
-import { OutboundCallService } from './outbound-call.service';
-import { TwilioSignatureGuard } from './twilio-signature.guard';
+import { TwilioCallProcessor } from './twilio/twilio-call.processor';
+import { TwilioOutboundService } from './twilio/twilio-outbound.service';
+import { TwilioSignatureGuard } from './twilio/twilio-signature.guard';
+import { TwilioTwimlController } from './twilio/twilio-twiml.controller';
 import { VoiceGateway } from './voice.gateway';
-import { VoiceCallProcessor } from './voice-call.processor';
 import { VoiceSessionManager } from './voice-session.manager';
-import { VoiceTwimlController } from './voice-twiml.controller';
 
-/**
- * Module for voice call support via Twilio ConversationRelay.
- *
- * Provides:
- * - TwiML webhook controller for call setup
- * - WebSocket gateway for real-time speech-to-text / text-to-speech
- * - Session manager for tracking active calls
- * - Outbound call service for initiating calls
- * - BullMQ processor for scheduled/dispatched calls
- */
 @Module({
   imports: [
     ConfigModule,
@@ -34,15 +24,15 @@ import { VoiceTwimlController } from './voice-twiml.controller';
       },
     }),
   ],
-  controllers: [VoiceTwimlController],
+  controllers: [TwilioTwimlController],
   providers: [
     VoiceGateway,
     VoiceSessionManager,
-    OutboundCallService,
-    VoiceCallProcessor,
+    TwilioOutboundService,
+    TwilioCallProcessor,
     TwilioSignatureGuard,
   ],
-  exports: [OutboundCallService],
+  exports: [TwilioOutboundService],
 })
 export class VoiceModule implements OnModuleInit {
   constructor(

@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import { createMockLogger } from '../../test/mocks/pino-logger.mock';
-import { OutboundCallService } from './outbound-call.service';
+import { createMockLogger } from '../../../test/mocks/pino-logger.mock';
+import { TwilioOutboundService } from './twilio-outbound.service';
 
-describe('OutboundCallService', () => {
-  let service: OutboundCallService;
+describe('TwilioOutboundService', () => {
+  let service: TwilioOutboundService;
   let mockTwilioClient: {
     calls: { create: ReturnType<typeof mock> };
   };
@@ -24,7 +24,7 @@ describe('OutboundCallService', () => {
       }),
     };
 
-    service = new OutboundCallService(
+    service = new TwilioOutboundService(
       createMockLogger(),
       mockConfigService as never,
     );

@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import { createMockLogger } from '../../test/mocks/pino-logger.mock';
-import { VoiceCallProcessor } from './voice-call.processor';
+import { createMockLogger } from '../../../test/mocks/pino-logger.mock';
+import { TwilioCallProcessor } from './twilio-call.processor';
 
-describe('VoiceCallProcessor', () => {
-  let processor: VoiceCallProcessor;
+describe('TwilioCallProcessor', () => {
+  let processor: TwilioCallProcessor;
   let mockOutboundCallService: { callUser: ReturnType<typeof mock> };
 
   beforeEach(() => {
@@ -11,7 +11,7 @@ describe('VoiceCallProcessor', () => {
       callUser: mock(() => Promise.resolve('CA-processed-call')),
     };
 
-    processor = new VoiceCallProcessor(
+    processor = new TwilioCallProcessor(
       createMockLogger(),
       mockOutboundCallService as never,
     );
