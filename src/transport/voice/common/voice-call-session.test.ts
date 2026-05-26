@@ -282,6 +282,71 @@ describe('VoiceCallSessionImpl', () => {
     });
   });
 
+  describe('abort signal hygiene', () => {
+    /**
+     * Regression: production logs were flooded with `unhandledRejection`
+     * stack traces from `safeAbort` because `onTranscript` builds an
+     * `abortPromise` that rejects the moment the abort signal fires.
+     * After a stream completes normally, nothing is awaiting that promise
+     * anymore — a subsequent `interrupt`/`close` would cause an orphan
+     * `AbortError` rejection. The fix is to skip the rejection when the
+     * stream has already finished.
+     */
+    test('interrupt after a completed stream does not produce unhandledRejection', async () => {
+      orchestrator.executeStreaming = generatorOf([
+        { type: 'text-delta', delta: 'ok' },
+        { type: 'finish' },
+      ]);
+
+      const captured: unknown[] = [];
+      const listener = (reason: unknown) => captured.push(reason);
+      process.on('unhandledRejection', listener);
+
+      try {
+        const session = makeSession();
+        await session.handleInput({
+          type: 'transcript',
+          text: 'hi',
+          isFinal: true,
+        });
+        // Stream is done. Fire interrupt — must not leak a rejection.
+        await session.handleInput({ type: 'interrupt' });
+        // Give the microtask queue time to surface any unhandled rejection.
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        expect(captured).toEqual([]);
+      } finally {
+        process.off('unhandledRejection', listener);
+      }
+    });
+
+    test('close after a completed stream does not produce unhandledRejection', async () => {
+      orchestrator.executeStreaming = generatorOf([
+        { type: 'text-delta', delta: 'ok' },
+        { type: 'finish' },
+      ]);
+
+      const captured: unknown[] = [];
+      const listener = (reason: unknown) => captured.push(reason);
+      process.on('unhandledRejection', listener);
+
+      try {
+        const session = makeSession();
+        await session.handleInput({
+          type: 'transcript',
+          text: 'hi',
+          isFinal: true,
+        });
+        session.close();
+        await new Promise(resolve => setTimeout(resolve, 50));
+
+        expect(captured).toEqual([]);
+      } finally {
+        process.off('unhandledRejection', listener);
+      }
+    });
+  });
+
   describe('error handling', () => {
     test('AbortError from the LLM stream is swallowed', async () => {
       orchestrator.executeStreaming = mock(() => {
