@@ -21,7 +21,7 @@ const STATUS_CALLBACK_EVENTS = [
  * from our voice webhook, passing optional call context as a query parameter.
  */
 @Injectable()
-export class OutboundCallService {
+export class TwilioOutboundService {
   private readonly client: ReturnType<typeof twilio>;
   private readonly twilioPhoneNumber: string;
   private readonly userPhone: string;
@@ -31,7 +31,7 @@ export class OutboundCallService {
     private readonly logger: PinoLogger,
     private readonly configService: ConfigService,
   ) {
-    this.logger.setContext(OutboundCallService.name);
+    this.logger.setContext(TwilioOutboundService.name);
 
     const accountSid = this.configService.get<string>('twilio.accountSid');
     const apiKeySid = this.configService.get<string>('twilio.apiKeySid');

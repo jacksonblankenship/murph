@@ -1,7 +1,7 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { PinoLogger } from 'nestjs-pino';
-import { OutboundCallService } from './outbound-call.service';
+import { TwilioOutboundService } from './twilio-outbound.service';
 
 /** Max characters of context to include in log messages. */
 const LOG_PREVIEW_LENGTH = 100;
@@ -22,13 +22,13 @@ export interface VoiceCallJobData {
  * - The task processor (scheduled calls with `action: 'call'`)
  */
 @Processor('voice-calls')
-export class VoiceCallProcessor extends WorkerHost {
+export class TwilioCallProcessor extends WorkerHost {
   constructor(
     private readonly logger: PinoLogger,
-    private readonly outboundCallService: OutboundCallService,
+    private readonly outboundCallService: TwilioOutboundService,
   ) {
     super();
-    this.logger.setContext(VoiceCallProcessor.name);
+    this.logger.setContext(TwilioCallProcessor.name);
   }
 
   /**
@@ -43,7 +43,7 @@ export class VoiceCallProcessor extends WorkerHost {
 
     // `callContext` rather than `context` — pino treats `context` as the
     // logger's class-name slot, so using it here would clobber the
-    // `VoiceCallProcessor` tag on every log line.
+    // `TwilioCallProcessor` tag on every log line.
     this.logger.info(
       { userId, callContext: context?.substring(0, LOG_PREVIEW_LENGTH) },
       'Processing outbound call job',

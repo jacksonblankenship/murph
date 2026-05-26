@@ -1,56 +1,18 @@
-import { BullModule, InjectQueue } from '@nestjs/bullmq';
-import { Module, OnModuleInit } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
-import { Queue } from 'bullmq';
-import { ChannelModule } from '../../channels/channel.module';
-import { AgentDispatcher } from '../../dispatcher';
-import { OutboundCallService } from './outbound-call.service';
-import { TwilioSignatureGuard } from './twilio-signature.guard';
-import { VoiceGateway } from './voice.gateway';
-import { VoiceCallProcessor } from './voice-call.processor';
-import { VoiceSessionManager } from './voice-session.manager';
-import { VoiceTwimlController } from './voice-twiml.controller';
+import { Module } from '@nestjs/common';
+import { VoiceSessionModule } from './common/voice-session.module';
+import { TwilioVoiceModule } from './twilio/twilio-voice.module';
 
 /**
- * Module for voice call support via Twilio ConversationRelay.
+ * Umbrella module that bundles every voice transport.
  *
- * Provides:
- * - TwiML webhook controller for call setup
- * - WebSocket gateway for real-time speech-to-text / text-to-speech
- * - Session manager for tracking active calls
- * - Outbound call service for initiating calls
- * - BullMQ processor for scheduled/dispatched calls
+ * Currently provides Twilio only. To add another voice transport, declare
+ * a sibling module under `transport/voice/<name>/` and import it here.
+ *
+ * Re-exports {@link TwilioVoiceModule} so consumers (e.g. `AppModule`) get
+ * full access to Twilio's exports, including `TwilioOutboundService`.
  */
 @Module({
-  imports: [
-    ConfigModule,
-    ChannelModule,
-    BullModule.registerQueue({
-      name: 'voice-calls',
-      defaultJobOptions: {
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 1000 },
-        removeOnComplete: true,
-      },
-    }),
-  ],
-  controllers: [VoiceTwimlController],
-  providers: [
-    VoiceGateway,
-    VoiceSessionManager,
-    OutboundCallService,
-    VoiceCallProcessor,
-    TwilioSignatureGuard,
-  ],
-  exports: [OutboundCallService],
+  imports: [VoiceSessionModule, TwilioVoiceModule],
+  exports: [TwilioVoiceModule],
 })
-export class VoiceModule implements OnModuleInit {
-  constructor(
-    private readonly dispatcher: AgentDispatcher,
-    @InjectQueue('voice-calls') private readonly voiceCallsQueue: Queue,
-  ) {}
-
-  onModuleInit(): void {
-    this.dispatcher.registerQueue('voice-calls', this.voiceCallsQueue);
-  }
-}
+export class VoiceModule {}

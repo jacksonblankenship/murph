@@ -14,7 +14,7 @@ import type { Response } from 'express';
 import { PinoLogger } from 'nestjs-pino';
 import twilio from 'twilio';
 import type VoiceResponse from 'twilio/lib/twiml/VoiceResponse';
-import { AgentDispatcher } from '../../dispatcher';
+import { AgentDispatcher } from '../../../dispatcher';
 import { TwilioSignatureGuard } from './twilio-signature.guard';
 
 /** Call statuses that indicate the call never connected to the user. */
@@ -30,13 +30,13 @@ const TERMINAL_FAILURE_STATUSES = new Set([
  *
  * Called by Twilio when:
  * - An inbound call arrives at our Twilio number
- * - An outbound call is initiated via `OutboundCallService`
+ * - An outbound call is initiated via `TwilioOutboundService`
  *
  * Returns TwiML that instructs Twilio to open a ConversationRelay
  * WebSocket connection back to our voice gateway.
  */
 @Controller('voice')
-export class VoiceTwimlController {
+export class TwilioTwimlController {
   private readonly serverUrl: string;
 
   constructor(
@@ -44,7 +44,7 @@ export class VoiceTwimlController {
     private readonly configService: ConfigService,
     private readonly dispatcher: AgentDispatcher,
   ) {
-    this.logger.setContext(VoiceTwimlController.name);
+    this.logger.setContext(TwilioTwimlController.name);
     this.serverUrl = this.configService.get<string>('voice.serverUrl');
   }
 
@@ -107,8 +107,8 @@ export class VoiceTwimlController {
    * `busy`, `no-answer`, `canceled`), dispatches to the `scheduled-messages`
    * queue so Murph can compose a natural fallback message via text.
    *
-   * @param userId - Telegram user ID, passed as query param from OutboundCallService
-   * @param context - Original call context, passed as query param from OutboundCallService
+   * @param userId - Telegram user ID, passed as query param from TwilioOutboundService
+   * @param context - Original call context, passed as query param from TwilioOutboundService
    * @param body - Twilio status callback POST body
    */
   @Post('status')

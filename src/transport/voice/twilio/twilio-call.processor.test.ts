@@ -1,19 +1,19 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
-import { createMockLogger } from '../../test/mocks/pino-logger.mock';
-import { VoiceCallProcessor } from './voice-call.processor';
+import { createMockLogger } from '../../../test/mocks/pino-logger.mock';
+import { TwilioCallProcessor } from './twilio-call.processor';
 
-describe('VoiceCallProcessor', () => {
-  let processor: VoiceCallProcessor;
-  let mockOutboundCallService: { callUser: ReturnType<typeof mock> };
+describe('TwilioCallProcessor', () => {
+  let processor: TwilioCallProcessor;
+  let mockTwilioOutboundService: { callUser: ReturnType<typeof mock> };
 
   beforeEach(() => {
-    mockOutboundCallService = {
+    mockTwilioOutboundService = {
       callUser: mock(() => Promise.resolve('CA-processed-call')),
     };
 
-    processor = new VoiceCallProcessor(
+    processor = new TwilioCallProcessor(
       createMockLogger(),
-      mockOutboundCallService as never,
+      mockTwilioOutboundService as never,
     );
   });
 
@@ -24,8 +24,8 @@ describe('VoiceCallProcessor', () => {
 
     const result = await processor.process(mockJob as never);
 
-    expect(mockOutboundCallService.callUser).toHaveBeenCalledTimes(1);
-    expect(mockOutboundCallService.callUser).toHaveBeenCalledWith(
+    expect(mockTwilioOutboundService.callUser).toHaveBeenCalledTimes(1);
+    expect(mockTwilioOutboundService.callUser).toHaveBeenCalledWith(
       42,
       'Morning check-in',
     );
@@ -39,7 +39,7 @@ describe('VoiceCallProcessor', () => {
 
     const result = await processor.process(mockJob as never);
 
-    expect(mockOutboundCallService.callUser).toHaveBeenCalledWith(
+    expect(mockTwilioOutboundService.callUser).toHaveBeenCalledWith(
       42,
       undefined,
     );
