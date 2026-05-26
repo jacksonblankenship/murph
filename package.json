@@ -3,7 +3,7 @@
   "scripts": {
     "start": "bun run dist/main.js",
     "dev": "bun --watch src/main.ts",
-    "build": "tsc -p tsconfig.build.json && cp -r src/prompts/templates dist/prompts/ && mkdir -p dist/transport/voice/twilio && cp -r src/transport/voice/twilio/assets dist/transport/voice/twilio/",
+    "build": "nest build",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "lint:fix": "biome check --fix .",
@@ -58,6 +58,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.3.14",
+    "@nestjs/cli": "^11.0.21",
     "@types/bun": "^1.2.4",
     "@types/ioredis": "^5.0.0",
     "@types/node": "^25.2.2",
