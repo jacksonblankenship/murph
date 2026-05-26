@@ -4,16 +4,16 @@ import { TwilioCallProcessor } from './twilio-call.processor';
 
 describe('TwilioCallProcessor', () => {
   let processor: TwilioCallProcessor;
-  let mockOutboundCallService: { callUser: ReturnType<typeof mock> };
+  let mockTwilioOutboundService: { callUser: ReturnType<typeof mock> };
 
   beforeEach(() => {
-    mockOutboundCallService = {
+    mockTwilioOutboundService = {
       callUser: mock(() => Promise.resolve('CA-processed-call')),
     };
 
     processor = new TwilioCallProcessor(
       createMockLogger(),
-      mockOutboundCallService as never,
+      mockTwilioOutboundService as never,
     );
   });
 
@@ -24,8 +24,8 @@ describe('TwilioCallProcessor', () => {
 
     const result = await processor.process(mockJob as never);
 
-    expect(mockOutboundCallService.callUser).toHaveBeenCalledTimes(1);
-    expect(mockOutboundCallService.callUser).toHaveBeenCalledWith(
+    expect(mockTwilioOutboundService.callUser).toHaveBeenCalledTimes(1);
+    expect(mockTwilioOutboundService.callUser).toHaveBeenCalledWith(
       42,
       'Morning check-in',
     );
@@ -39,7 +39,7 @@ describe('TwilioCallProcessor', () => {
 
     const result = await processor.process(mockJob as never);
 
-    expect(mockOutboundCallService.callUser).toHaveBeenCalledWith(
+    expect(mockTwilioOutboundService.callUser).toHaveBeenCalledWith(
       42,
       undefined,
     );

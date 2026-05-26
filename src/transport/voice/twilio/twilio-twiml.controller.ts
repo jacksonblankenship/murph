@@ -30,7 +30,7 @@ const TERMINAL_FAILURE_STATUSES = new Set([
  *
  * Called by Twilio when:
  * - An inbound call arrives at our Twilio number
- * - An outbound call is initiated via `OutboundCallService`
+ * - An outbound call is initiated via `TwilioOutboundService`
  *
  * Returns TwiML that instructs Twilio to open a ConversationRelay
  * WebSocket connection back to our voice gateway.
@@ -107,8 +107,8 @@ export class TwilioTwimlController {
    * `busy`, `no-answer`, `canceled`), dispatches to the `scheduled-messages`
    * queue so Murph can compose a natural fallback message via text.
    *
-   * @param userId - Telegram user ID, passed as query param from OutboundCallService
-   * @param context - Original call context, passed as query param from OutboundCallService
+   * @param userId - Telegram user ID, passed as query param from TwilioOutboundService
+   * @param context - Original call context, passed as query param from TwilioOutboundService
    * @param body - Twilio status callback POST body
    */
   @Post('status')
